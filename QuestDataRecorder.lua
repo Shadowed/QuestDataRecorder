@@ -91,10 +91,11 @@ function QDR:QUEST_LOG_UPDATE(event)
 		local questName, _, _, _, isHeader = GetQuestLogTitle(i)
 		if( not isHeader and self:StripData(questName) == questGiven ) then
 			local questID = string.match(GetQuestLink(i), "|Hquest:(%d+):(%-?%d+)|h")
-			questId = tonumber(questID)
+			questID = tonumber(questID)
 			
 			self.questData[questID].starts = questGiverID
 			self.questData[questID].startType = "npc"
+			print(string.format("NPC %d starts quest %d (%s)", questGiverID, questID, questName))
 			break
 		end
 	end
@@ -121,6 +122,7 @@ function QDR:QUEST_PROGRESS(event)
 
 		self.questData[questID].ends = self:GetMobID(UnitGUID("NPC"))
 		self.questData[questID].endType = "npc"
+		print(string.format("NPC %d (%s) ends quest %d (%s)", self.questData[questID].ends, (UnitName("NPC")), questID, titleText))
 	end
 end
 
@@ -144,6 +146,8 @@ function QDR:QUEST_FINISHED(event)
 		local zoneID = self.mapData[questGiverZone]
 		self.npcData[questGiverID][zoneID] = self.npcData[questGiverID][zoneID] or {}
 		table.insert(self.npcData[questGiverID][zoneID], string.format("%.2f,%.2f", questGiverX, questGiverY))
+		
+		print(string.format("NPC %d is located at %.2f, %.2f in zone id %d.", questGiverID, questGiverX, questGiverY, zoneID))
 	end
 end
 

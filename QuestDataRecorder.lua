@@ -4,7 +4,7 @@ local L = QuestDataRecLocals
 local lootSelfFilter, lootSelfMultiFilter
 local playerX, playerY, playerZone, questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
 local tempQuestLog, tempQuestIDList, questLog, questIDList = {}, {}
-local lootList = {}
+local questPatterns, factionRanks = {}
 
 function QDR:OnInitialize()
 	QuestDataRecDB = QuestDataRecDB or {stopped = false, npcData = {}, itemData = {}, questData = {}}
@@ -18,6 +18,7 @@ function QDR:OnInitialize()
 			if( not QDR.db.questData[index] ) then
 				return tbl[index]
 			end
+			
 			
 			tbl[index] = loadstring("return " .. QDR.db.questData[index])()
 
@@ -55,12 +56,27 @@ function QDR:OnInitialize()
 		end
 	})
 	
-	-- Item filtering
-	LOOT_ITEM_SELF = "You receive loot: %s.";
-	LOOT_ITEM_SELF_MULTIPLE = "You receive loot: %sx%d.";
+	-- Loot patterns
+	lootSelfFilter = self:Deformat(LOOT_ITEM_SELF)
+	lootSelfMultiFilter = self:Deformat(LOOT_ITEM_SELF_MULTIPLE)
 	
-	lootSelfFilter = string.gsub(string.gsub(LOOT_ITEM_SELF, "%.", "%%."), "%%s", "(.+)")
-	lootSelfMultiFilter = string.gsub(string.gsub(string.gsub(LOOT_ITEM_SELF_MULTIPLE, "%.", "%%."), "%%d", "([0-9]+)"), "%%s", "(.+)")
+	-- Quest patterns
+	questPatterns.reputation = self:Deformat(QUEST_FACTION_NEEDED)
+	questPatterns.item = self:Deformat(QUEST_ITEMS_NEEDED)
+	questPatterns.monster = self:Deformat(QUEST_MONSTERS_KILLED)
+	questPatterns.object = self:Deformat(QUEST_OBJECTS_FOUND)
+	questPatterns.player = self:Deformat(QUEST_PLAYERS_KILLED)
+	
+	factionRanks = {
+		[FACTION_STANDING_LABEL1] = 0,
+		[FACTION_STANDING_LABEL2] = 1,
+		[FACTION_STANDING_LABEL3] = 3,
+		[FACTION_STANDING_LABEL4] = 4,
+		[FACTION_STANDING_LABEL5] = 5,
+		[FACTION_STANDING_LABEL6] = 6,
+		[FACTION_STANDING_LABEL7] = 7,
+		[FACTION_STANDING_LABEL8] = 8,
+	}
 	
 	-- Handle quest abandoning
 	hooksecurefunc("AbandonQuest", function()
@@ -97,6 +113,10 @@ function QDR:StartRecording()
 end
 
 function QDR:StopRecording()
+	self.frame:UnregisterEvent("QUEST_DETAIL")
+	self.frame:UnregisterEvent("QUEST_LOG_UPDATE")
+	self.frame:UnregisterEvent("QUEST_COMPLETE")
+	self.frame:UnregisterEvent("CHAT_MSG_LOOT")
 end
 
 function QDR:CHAT_MSG_LOOT(event, msg)
@@ -121,6 +141,14 @@ function QDR:CHAT_MSG_LOOT(event, msg)
 			self:Debug(string.format("Item looted %d in %d at %.2f, %.2f.", itemID, self.mapToID[zone], x, y))
 		end
 	end
+end
+
+function QDR:Deformat(text)
+	text = string.gsub(text, "%.", "%%.")
+	text = string.gsub(text, "%%s", "(.+)")
+	text = string.gsub(text, "%%d", "([0-9]+)")
+	
+	return text
 end
 
 -- Quest log updated, see what changed quest-wise
@@ -163,11 +191,34 @@ function QDR:QUEST_LOG_UPDATE(event)
 
 			for objID=1, GetNumQuestLeaderBoards(index) do
 				local text, type, finished = GetQuestLogLeaderBoard(objID, index)
+				local current, max
+				if( type == "player" ) then
+					current, max = string.match(text, questPatterns[type])
+					current = tonumber(current)
+					max = tonumber(max)
+				elseif( type == "reputation" ) then
+					local currentLevel, neededLevel = select(2, string.match(text, questPatterns[type]))
+					current = factionRanks[currentLevel]
+					max = factionRanks[neededLevel]
+				elseif( questPatterns[type] ) then
+					current, max = select(2, string.match(text, questPatterns[type]))
+					if( not current or not max ) then
+						current, max = string.match(text, L["(%d+)/(%d+)$"])
+					end
+					
+					current = tonumber(current)
+					max = tonumber(max)
+				else
+					max = 1
+					current = finished and 1 or 0
+				end
+								
 				questData.objectives[objID] = questData.objectives[objID] or {}
 				questData.objectives[objID].text = text
 				questData.objectives[objID].type = type
 				questData.objectives[objID].finished = finished
-				questData.objectives[objID].id = text .. type .. (finished and "true" or "false")
+				questData.objectives[objID].current = current
+				questData.objectives[objID].max = max
 			end
 		end
 		
@@ -236,7 +287,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 			local questData = questLog[questIDList[questID]]
 			if( questData.updateLock < time ) then
 				for objID, objData in pairs(tempQuestLog[mapID].objectives) do
-					if( questData.objectives[objID] and questData.objectives[objID].id and questData.objectives[objID].id ~= objData.id ) then
+					if( questData.objectives[objID] and questData.objectives[objID].current and objData.current and questData.objectives[objID].current < objData.current ) then
 						local x, y, zone = self:GetPlayerPosition()
 						local zoneID = self.mapToID[zone]
 
@@ -391,7 +442,7 @@ function QDR:PLAYER_LOGOUT()
 			for _, coordData in pairs(objData.coords) do
 				coords = string.format("%s%s;", coords, coordData)
 			end
-			objectives = string.format("%s[%d]={type=%d;coords={%s}", objectives, objID, objData.type or 0, coords)
+			objectives = string.format("%s[%d]={type=%d;coords={%s}};", objectives, objID, objData.type or 0, coords)
 		end
 		
 		self.db.questData[questID] = string.format("{stype=%d;sid=%d;etype=%d;eid=%d;objectives={%s}}", questData.stype or 0, questData.sid or 0, questData.etype or 0, questData.eid or 0, objectives)
@@ -428,6 +479,29 @@ SlashCmdList["QUESTDATAREC"] = function(msg)
 	msg = string.lower(msg or "")
 	
 	if( msg == "reset" ) then
+		if( not StaticPopupDialogs["QUESTDATAREC_CONFIRM_RESET"] ) then
+			StaticPopupDialogs["QUESTDATAREC_CONFIRM_RESET"] = {
+				text = L["Are you sure you want to reset ALL data recorded?"],
+				button1 = L["Yes"],
+				button2 = L["No"],
+				OnAccept = function()
+					QuestDataRecDB.npcData = {}
+					QuestDataRecDB.questData = {}
+					QuestDataRecDB.itemData = {}
+
+					QDR.npcData = {}
+					QDR.questData = {}
+					QDR.itemData = {}
+
+					QDR:Print(L["All recorded data has been reset."])
+				end,
+				timeout = 30,
+				whileDead = 1,
+				hideOnEscape = 1,
+			}
+		end
+		
+		StaticPopup_Show("TOMTOM_REMOVE_ALL_CONFIRM")
 	
 	elseif( msg == "stop" ) then
 		self.db.stopped = true

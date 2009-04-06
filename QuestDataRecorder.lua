@@ -116,7 +116,9 @@ end
 
 -- DEBUG (OBVIOUSLY)
 function QDR:Debug(msg)
-	table.insert(self.db.log, string.format("[%s] %s", GetTime(), msg))
+	if( self.db.log ) then
+		table.insert(self.db.log, string.format("[%s] %s", GetTime(), msg))
+	end
 end
 
 --[[
@@ -165,6 +167,7 @@ function QDR:RecordLootDrop(link)
 end
 
 -- Quest log updated, see what changed quest-wise
+-- NTS: Redo this function to use two tables at most to make it more sane to work with
 function QDR:QUEST_LOG_UPDATE(event)
 	-- Reset our temp quest data first
 	for k in pairs(tempQuestIDList) do tempQuestIDList[k] = nil end
@@ -175,7 +178,9 @@ function QDR:QUEST_LOG_UPDATE(event)
 			end
 		end
 	end
-
+	
+	local time = GetTime()
+	
 	-- Scan quest log
 	local questID
 	local foundQuests = 0
@@ -192,17 +197,20 @@ function QDR:QUEST_LOG_UPDATE(event)
 			questID = tonumber(questID)
 			
 			tempQuestLog[foundQuests] = tempQuestLog[foundQuests] or {objectives = {}}
-			tempQuestLog[foundQuests].questName = questName
-			tempQuestLog[foundQuests].questID = questID
+			
+			local questData = tempQuestLog[foundQuests]
+			questData.updateLock = 0
+			questData.questName = questName
+			questData.questID = questID
 			tempQuestIDList[questID] = foundQuests
 
 			for objID=1, GetNumQuestLeaderBoards(index) do
 				local text, type, finished = GetQuestLogLeaderBoard(objID, index)
-				tempQuestLog[foundQuests].objectives[objID] = tempQuestLog[foundQuests].objectives[objID] or {}
-				tempQuestLog[foundQuests].objectives[objID].text = text
-				tempQuestLog[foundQuests].objectives[objID].type = type
-				tempQuestLog[foundQuests].objectives[objID].finished = finished
-				tempQuestLog[foundQuests].objectives[objID].id = text .. type .. (finished and "true" or "false")
+				questData.objectives[objID] = questData.objectives[objID] or {}
+				questData.objectives[objID].text = text
+				questData.objectives[objID].type = type
+				questData.objectives[objID].finished = finished
+				questData.objectives[objID].id = text .. type .. (finished and "true" or "false")
 			end
 		end
 		
@@ -221,13 +229,17 @@ function QDR:QUEST_LOG_UPDATE(event)
 	for k in pairs(tempQuestIDList) do tempID = tempID .. k .. ", " end
 	for k in pairs(questIDList) do pID = pID .. k .. ", " end
 	
-	self:Debug(string.format("Quests updated, found %s this update, we had %s last update.", tempID, pID))
+	self:Debug(string.format("Quests updated, found %s / had %s", tempID, pID))
 		
 	-- We have some quest giver info, check if we either accepted or completed a quest
 	-- Find quests we accepted
 	if( questGiverID ) then
-		for questID in pairs(tempQuestIDList) do
+		for questID, mapID in pairs(tempQuestIDList) do
 			if( not questIDList[questID] ) then
+				-- We lock the objective updates for half a second after accepting, this prevents
+				-- bad objective change data from happening
+				tempQuestLog[mapID].updateLock = time + 0.50
+				
 				self.questData[questID].starts = questGiverID
 				self.questData[questID].startType = questGiverType
 
@@ -243,6 +255,8 @@ function QDR:QUEST_LOG_UPDATE(event)
 			-- Found quests we completed
 			for questID, mapID in pairs(questIDList) do
 				if( not tempQuestIDList[questID] ) then
+					questLog[mapID].updateLock = time + 1
+					
 					self.questData[questID].ends = questGiverID
 					self.questData[questID].endType = questGiverType
 
@@ -255,21 +269,25 @@ function QDR:QUEST_LOG_UPDATE(event)
 		
 	-- Now find out what objectives changed
 	for questID, mapID in pairs(tempQuestIDList) do
+		-- We have this quest last update, so we can compare it
 		if( questIDList[questID] ) then
-			local questObjectives = questLog[questIDList[questID]].objectives
-			for objID, objData in pairs(tempQuestLog[mapID].objectives) do
-				if( questObjectives[objID] and questObjectives[objID].id and questObjectives[objID].id ~= objData.id ) then
-					local x, y, zone = self:GetPlayerLocation()
-					local zoneID = self.mapData[zone]
-					
-					self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {}
-					self.questData[questID].objectives[objID].type = objData.type
-					self.questData[questID].objectives[objID][zoneID] = self.questData[questID].objectives[objID][zoneID] or {}
-					
-					table.insert(self.questData[questID].objectives[objID][zoneID], string.format("%.2f,%.2f", x, y))
-					
-					print(string.format("Recorded quest id %d, objective id %d (type %s), in %.2f, %.2f", questID, objID, objData.type, x, y))
-					self:Debug(string.format("Objectives changed \"%s\" (%s for %d at %.2f, %.2f.", objData.text, objData.type, questID, x, y))
+			
+			local questData = questLog[questIDList[questID]]
+			if( questData.updateLock < time ) then
+				for objID, objData in pairs(tempQuestLog[mapID].objectives) do
+					if( questData.objectives[objID] and questData.objectives[objID].id and questData.objectives[objID].id ~= objData.id ) then
+						local x, y, zone = self:GetPlayerLocation()
+						local zoneID = self.mapData[zone]
+
+						self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {}
+						self.questData[questID].objectives[objID].type = objData.type
+						self.questData[questID].objectives[objID][zoneID] = self.questData[questID].objectives[objID][zoneID] or {}
+
+						table.insert(self.questData[questID].objectives[objID][zoneID], string.format("%.2f,%.2f", x, y))
+
+						print(string.format("Recorded quest id %d, objective id %d (type %s), in %.2f, %.2f", questID, objID, objData.type, x, y))
+						self:Debug(string.format("Objectives changed \"%s\" %s for %d at %.2f, %.2f.", objData.text, objData.type, questID, x, y))
+					end
 				end
 			end
 		end
@@ -298,6 +316,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 		questIDList[questID] = mapID
 		
 		questLog[mapID] = questLog[mapID] or {objectives = {}}
+		questLog[mapID].updateLock = questData.updateLock
 		questLog[mapID].questName = questData.questName
 		questLog[mapID].questID = questData.questID
 

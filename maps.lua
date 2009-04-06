@@ -1,3 +1,5 @@
+if( not QDR ) then return end
+
 QDR.mapData = {
 	["LochModan"] = 238,
 	["Barrens"] = 107,

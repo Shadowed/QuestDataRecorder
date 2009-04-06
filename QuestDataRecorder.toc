@@ -1,11 +1,9 @@
 ## Interface: 30100
 ## Title: Quest Data Recorder
-## Author: Selari
-## Version: $Revision$
 ## Notes: Records quest objective locations
 ## SavedVariables: QuestDataRecDB
 
 localization.enUS.lua
 
 QuestDataRecorder.lua
-maps.lua
+data.lua

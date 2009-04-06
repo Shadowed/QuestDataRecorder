@@ -1,6 +1,7 @@
 QDR = {}
 
 local L = QuestDataRecLocals
+local lootSelfFilter, lootSelfMultiFilter
 local playerX, playerY, playerZone
 local questGiverID, questGiven, questFinished, questGiverType
 local tempQuestLog, tempQuestIDList, questLog, questIDList = {}, {}
@@ -19,60 +20,22 @@ function QDR:OnInitialize()
 				return tbl[index]
 			end
 			
-			-- Parse it out
-			local startType, startID, endType, endID, objectivesType, objectives = string.match(QDR.db.questData[index], "starts ([a-z]+):([0-9]+);ends ([a-z]+):([0-9]+);objtypes (.+);objectives (.+)")
-			tbl[index].startType = startType
-			tbl[index].starts = tonumber(startID)
-			tbl[index].endType = endType
-			tbl[index].ends = tonumber(endID)
-			
-			-- Parse objectives
-			if( objectives ~= "none" ) then
-				for objectiveID, zoneID, coords in string.gmatch(objectives, "([0-9]+):([0-9]+):([^&]+)&") do
-					objectiveID = tonumber(objectiveID)
-					zoneID = tonumber(zoneID)
+			tbl[index] = loadstring("return " .. QDR.db.questData[index])()
 
-					tbl[index].objectives[objectiveID] = tbl[index].objectives[objectiveID] or {}
-					tbl[index].objectives[objectiveID][zoneID] = tbl[index].objectives[objectiveID][zoneID] or {}
-
-					for coordX, coordY in string.gmatch(coords, "([^,]+),([^*]+)*") do
-						table.insert(tbl[index].objectives[objectiveID][zoneID], string.format("%s,%s", coordX, coordY))
-					end
-				end
-			end
-				
-			-- Now parse there types
-			if( objectivesType ~= "none" ) then
-				for objectiveID, objectiveType in string.gmatch(objectivesType, "([0-9]+):([^&]+)&") do
-					tbl[index].objectives[objectiveID] = tbl[index].objectives[objectiveID] or {}
-					tbl[index].objectives[objectiveID].type = objectiveType
-				end
-			end
-			
 			return tbl[index]
 		end
 	})
 	
 	self.npcData = setmetatable({}, {
 		__index = function(tbl, index)
-			tbl[index] = {}
+			tbl[index] = {coords = {}}
 			
 			-- No data is cached yet
 			if( not QDR.db.npcData[index] ) then
 				return tbl[index]
 			end
 			
-			local type, data = string.match(QDR.db.npcData[index], "([a-z]+);(.+)")
-			tbl[index].type = type
-			
-			for zoneID, coords in string.gmatch(data, "([0-9]+):([^;]+);") do
-				zoneID = tonumber(zoneID)
-				
-				tbl[index][zoneID] = tbl[index][zoneID] or {}
-				for coordX, coordY in string.gmatch(coords, "([^,]+),([^*]+)*") do
-					table.insert(tbl[index][zoneID], string.format("%s,%s", coordX, coordY))
-				end
-			end
+			tbl[index] = loadstring("return " .. QDR.db.npcData[index])()
 			
 			return tbl[index]
 		end
@@ -80,33 +43,25 @@ function QDR:OnInitialize()
 	
 	self.itemData = setmetatable({}, {
 		__index = function(tbl, index)
-			tbl[index] = {}
+			tbl[index] = {coords = {}}
 			
 			-- No data is cached yet
 			if( not QDR.db.itemData[index] ) then
 				return tbl[index]
 			end
 			
-			for zoneID, coords in string.gmatch(QDR.db.itemData[index], "([0-9]+):([^;]+);") do
-				zoneID = tonumber(zoneID)
-				
-				tbl[index][zoneID] = tbl[index][zoneID] or {}
-				for coordX, coordY in string.gmatch(coords, "([^,]+),([^*]+)*") do
-					table.insert(tbl[index][zoneID], string.format("%s,%s", coordX, coordY))
-				end
-			end
+			tbl[index] = loadstring("return " .. QDR.db.itemData[index])()
 			
 			return tbl[index]
 		end
 	})
-		
-	-- Hook the loot function so we can record an item looted and such
-	hooksecurefunc("LootSlot", function(index)
-		if( lootList[index] ) then
-			self:RecordLootDrop(lootList[index])
-			lootList[index] = nil
-		end
-	end)
+	
+	-- Item filtering
+	LOOT_ITEM_SELF = "You receive loot: %s.";
+	LOOT_ITEM_SELF_MULTIPLE = "You receive loot: %sx%d.";
+	
+	lootSelfFilter = string.gsub(string.gsub(LOOT_ITEM_SELF, "%.", "%%."), "%%s", "(.+)")
+	lootSelfMultiFilter = string.gsub(string.gsub(string.gsub(LOOT_ITEM_SELF_MULTIPLE, "%.", "%%."), "%%d", "([0-9]+)"), "%%s", "(.+)")
 	
 	-- Recording
 	if( not self.db.stopped ) then
@@ -130,39 +85,33 @@ function QDR:StartRecording()
 	self.frame:RegisterEvent("QUEST_DETAIL")
 	self.frame:RegisterEvent("QUEST_LOG_UPDATE")
 	self.frame:RegisterEvent("QUEST_COMPLETE")
-	self.frame:RegisterEvent("LOOT_OPENED")
+	self.frame:RegisterEvent("CHAT_MSG_LOOT")
 end
 
 function QDR:StopRecording()
 end
 
-function QDR:LOOT_OPENED(event, autoLoot)
-	playerX, playerY, playerZone = self:GetPlayerLocation()
-	
-	for k in pairs(lootList) do lootList[k] = nil end
-	for i=1, GetNumLootItems() do
-		local link = GetLootSlotLink(i)
-		if( link ) then
-			if( autoLoot ) then
-				self:RecordLootDrop(link)
-			else
-				lootList[i] = link
-			end
-		end
+function QDR:CHAT_MSG_LOOT(event, msg)
+	local itemLink = string.match(msg, lootSelfFilter)
+	if( not itemLink ) then
+		itemLink = string.match(msg, lootSelfMultiFilter)
 	end
-end
+	
+	-- Got loot to parse
+	if( itemLink ) then
+		local itemType, subType = select(6, GetItemInfo(itemLink))
+		if( itemType == "Quest" and subType == "Quest" ) then
+			local itemID = string.match(itemLink, "item:([0-9]+)")
+			local x, y, zone = self:GetPlayerPosition()
 
-function QDR:RecordLootDrop(link)
-	local itemType, subType = select(6, GetItemInfo(link))
-	if( itemType == "Quest" and subType == "Quest" ) then
-		local itemID = string.match(link, "item:([0-9]+)")
-		local zoneID = self.mapData[playerZone]
+			itemID = tonumber(itemID)
 
-		itemID = tonumber(itemID)
-		self.itemData[itemID][zoneID] = self.itemData[itemID][zoneID] or {}
-		table.insert(self.itemData[itemid][zoneID], string.format("%.2f,%.2f", playerX, playerY))
+			table.insert(self.itemData[itemID].coords, self.mapToID[zone])
+			table.insert(self.itemData[itemID].coords, x)
+			table.insert(self.itemData[itemID].coords, y)
 
-		self:Debug(string.format("Item looted %d in %d at %.2f, %.2f.", itemID, zoneID, playerX, playerY))
+			self:Debug(string.format("Item looted %d in %d at %.2f, %.2f.", itemID, self.mapToID[zone], x, y))
+		end
 	end
 end
 
@@ -240,8 +189,8 @@ function QDR:QUEST_LOG_UPDATE(event)
 				-- bad objective change data from happening
 				tempQuestLog[mapID].updateLock = time + 0.50
 				
-				self.questData[questID].starts = questGiverID
-				self.questData[questID].startType = questGiverType
+				self.questData[questID].sid = questGiverID
+				self.questData[questID].stype = questGiverType
 
 				print(string.format("NPC %d starts quest %d", questGiverID, questID))
 				self:Debug(string.format("Accepted quest %s from %s (%s).", questID, questGiverID, questGiverType))
@@ -257,10 +206,10 @@ function QDR:QUEST_LOG_UPDATE(event)
 				if( not tempQuestIDList[questID] ) then
 					questLog[mapID].updateLock = time + 1
 					
-					self.questData[questID].ends = questGiverID
-					self.questData[questID].endType = questGiverType
+					self.questData[questID].eid = questGiverID
+					self.questData[questID].etype = questGiverType
 
-					print(string.format("NPC %d ends quest %d (%s)", self.questData[questID].ends, questID, questGiven))
+					print(string.format("NPC %d ends quest %d (%s)", self.questData[questID].eid, questID, questGiven))
 					self:Debug(string.format("Ended quest %s on %s (%s)", questID, questGiverID, questGiverType))
 				end
 			end
@@ -276,14 +225,15 @@ function QDR:QUEST_LOG_UPDATE(event)
 			if( questData.updateLock < time ) then
 				for objID, objData in pairs(tempQuestLog[mapID].objectives) do
 					if( questData.objectives[objID] and questData.objectives[objID].id and questData.objectives[objID].id ~= objData.id ) then
-						local x, y, zone = self:GetPlayerLocation()
-						local zoneID = self.mapData[zone]
+						local x, y, zone = self:GetPlayerPosition()
+						local zoneID = self.mapToID[zone]
 
-						self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {}
-						self.questData[questID].objectives[objID].type = objData.type
-						self.questData[questID].objectives[objID][zoneID] = self.questData[questID].objectives[objID][zoneID] or {}
-
-						table.insert(self.questData[questID].objectives[objID][zoneID], string.format("%.2f,%.2f", x, y))
+						self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {coords = {}}
+						self.questData[questID].objectives[objID].type = self.dataToID[objData.type]
+				
+						table.insert(self.questData[questID].objectives[objID].coords, zoneID)
+						table.insert(self.questData[questID].objectives[objID].coords, x)
+						table.insert(self.questData[questID].objectives[objID].coords, y)
 
 						print(string.format("Recorded quest id %d, objective id %d (type %s), in %.2f, %.2f", questID, objID, objData.type, x, y))
 						self:Debug(string.format("Objectives changed \"%s\" %s for %d at %.2f, %.2f.", objData.text, objData.type, questID, x, y))
@@ -333,7 +283,7 @@ end
 function QDR:QUEST_COMPLETE(event)
 	questGiverID, questGiverType = self:GetMobID(UnitGUID("npc"))
 	questGiven = self:StripData(GetTitleText())
-	playerX, playerY, playerZone = self:GetPlayerLocation()
+	playerX, playerY, playerZone = self:GetPlayerPosition()
 	questFinished = true
 	
 	self:Debug(string.format("Event quest completed %s on %s (%s) flagged for finished.", questGiven, questGiverID, questGiverType))
@@ -354,20 +304,21 @@ end
 -- Flag so we know that the next quest log event has data we might want
 function QDR:QUEST_FINISHED(event)
 	if( questGiverID ) then
-		playerX, playerY, playerZone = self:GetPlayerLocation()
+		playerX, playerY, playerZone = self:GetPlayerPosition()
 		
 		-- Save this NPCs location
-		local zoneID = self.mapData[playerZone]
+		local zoneID = self.mapToID[playerZone]
 		self.npcData[questGiverID].type = questGiverType
-		self.npcData[questGiverID][zoneID] = self.npcData[questGiverID][zoneID] or {}
-		table.insert(self.npcData[questGiverID][zoneID], string.format("%.2f,%.2f", playerX, playerY))
+		table.insert(self.npcData[questGiverID].coords, zoneID)
+		table.insert(self.npcData[questGiverID].coords, playerX)
+		table.insert(self.npcData[questGiverID].coords, playerY)
 		
 		print(string.format("NPC %d (%s) is located at %.2f, %.2f in zone id %d.", questGiverID, questGiverType, playerX, playerY, zoneID))
 		self:Debug(string.format("Event quest finished, on %s (%s) at %.2f, %.2f.", questGiverID, questGiverType, playerX, playerY))
 	end
 end
 
-function QDR:GetPlayerLocation()
+function QDR:GetPlayerPosition()
 	-- Store what map the player is currently in
 	local currentCont = GetCurrentMapContinent()
 	local currentZone = GetCurrentMapZone()
@@ -378,7 +329,7 @@ function QDR:GetPlayerLocation()
 	zone = GetMapInfo()
 	SetMapZoom(currentCont, currentZone)
 
-	return x * 100, y * 100, zone
+	return tonumber(string.format("%.2f", x * 100)), tonumber(string.format("%.2f", y * 100)), zone
 end
 
 -- Handle any incompatabilies that other mods can cause
@@ -399,9 +350,9 @@ function QDR:GetMobID(guid)
 	local type = bit.band(tonumber(string.sub(guid, 3, 5), 16), 0x00f)
 	local mobType
 	if( type == 1 ) then
-		mobType = "object"	
+		mobType = self.dataToID.object
 	elseif( type == 3 ) then
-		mobType = "npc"		
+		mobType = self.dataToID.npc
 	else
 		return nil
 	end
@@ -413,65 +364,37 @@ end
 function QDR:PLAYER_LOGOUT()
 	-- Save quest data
 	for questID, questData in pairs(self.questData) do
-		local objStorage = ""
-		local typeStorage = ""
-		
+		local objectives = ""
 		for objID, objData in pairs(questData.objectives) do
-			typeStorage = string.format("%s%s:%s&", typeStorage, objID, objData.type or "none")
-			
-			for zoneID, coords in pairs(objData) do
-				if( zoneID ~= "type" ) then
-					local coordStorage = ""
-					for _, coord in pairs(coords) do
-						coordStorage = coordStorage .. coord .. "*"
-					end
-
-					objStorage = string.format("%s%s:%s:%s&", objStorage, objID, zoneID, coordStorage)
-				end
+			local coords = ""
+			for _, coordData in pairs(objData.coords) do
+				coords = string.format("%s%s;", coords, coordData)
 			end
+			objectives = string.format("%s[%d]={type=%d;coords={%s}", objectives, objID, objData.type or 0, coords)
 		end
 		
-		if( typeStorage == "" ) then
-			typeStorage = "none"
-		end
-		
-		if( objStorage == "" ) then
-			objStorage = "none"
-		end
-
-		self.db.questData[questID] = string.format("starts %s:%d;ends %s:%d;objtypes %s;objectives %s", questData.startType or "none", questData.starts or 0, questData.endType or "none", questData.ends or 0, typeStorage, objStorage)
+		self.db.questData[questID] = string.format("{stype=%d;sid=%d;etype=%d;eid=%d;objectives={%s}}", questData.stype or 0, questData.sid or 0, questData.etype or 0, questData.eid or 0, objectives)
 	end
 	
 	-- Save NPC data
 	for npcID, npcData in pairs(self.npcData) do
-		local storage = ""
-		for zoneID, coords in pairs(npcData) do
-			if( zoneID ~= "type" ) then
-				local coordStorage = ""
-				for _, coord in pairs(coords) do
-					coordStorage = coordStorage .. coord .. "*"
-				end
-
-				storage = string.format("%s%d:%s;", storage, zoneID, coordStorage)
-			end
+		local coords = ""
+		for _, coordData in pairs(npcData.coords) do
+			coords = string.format("%s%s;", coords, coordData)
 		end
 		
-		self.db.npcData[npcID] = string.format("%s;%s", npcData.type or "none", storage)
+		self.db.npcData[npcID] = string.format("{type=%d;coords={%s}}", npcData.type or 0, coords)
 	end
 	
 	-- Save item data
 	for itemID, itemData in pairs(self.itemData) do
 		local storage = ""
-		for zoneID, coords in pairs(itemdata) do
-			local coordStorage = ""
-			for _, coord in pairs(coords) do
-				coordStorage = coordStorage .. coord .. "*"
-			end
-			
-			storage = string.format("%s%d:%s;", storage, zoneID, coordStorage)
+		local coords = ""
+		for _, coordData in pairs(itemData.coords) do
+			coords = string.format("%s%s;", coords, coordData)
 		end
 		
-		self.db.itemdata[itemID] = storage
+		self.db.itemData[itemID] = string.format("{coords={%s}}", coords)
 	end
 end
 

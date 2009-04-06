@@ -2,8 +2,7 @@ QDR = {}
 
 local L = QuestDataRecLocals
 local lootSelfFilter, lootSelfMultiFilter
-local playerX, playerY, playerZone
-local questGiverID, questGiven, questFinished, questGiverType
+local playerX, playerY, playerZone, questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
 local tempQuestLog, tempQuestIDList, questLog, questIDList = {}, {}
 local lootList = {}
 
@@ -63,6 +62,16 @@ function QDR:OnInitialize()
 	lootSelfFilter = string.gsub(string.gsub(LOOT_ITEM_SELF, "%.", "%%."), "%%s", "(.+)")
 	lootSelfMultiFilter = string.gsub(string.gsub(string.gsub(LOOT_ITEM_SELF_MULTIPLE, "%.", "%%."), "%%d", "([0-9]+)"), "%%s", "(.+)")
 	
+	-- Handle quest abandoning
+	hooksecurefunc("AbandonQuest", function()
+		abandonedName = setToAbandon
+		setToAbandon = nil
+	end)
+	
+	hooksecurefunc("SetAbandonQuest", function()
+		setToAbandon = GetAbandonQuestName()
+	end)
+	
 	-- Recording
 	if( not self.db.stopped ) then
 		self:StartRecording()
@@ -81,7 +90,6 @@ end
 	with the NPC unitid becoming unusable so I still need to save info on QUEST_DETAIL.
 ]]
 function QDR:StartRecording()
-	self.frame:RegisterEvent("QUEST_FINISHED")
 	self.frame:RegisterEvent("QUEST_DETAIL")
 	self.frame:RegisterEvent("QUEST_LOG_UPDATE")
 	self.frame:RegisterEvent("QUEST_COMPLETE")
@@ -180,38 +188,42 @@ function QDR:QUEST_LOG_UPDATE(event)
 	
 	self:Debug(string.format("Quests updated, found %s / had %s", tempID, pID))
 		
-	-- We have some quest giver info, check if we either accepted or completed a quest
 	-- Find quests we accepted
-	if( questGiverID ) then
-		for questID, mapID in pairs(tempQuestIDList) do
-			if( not questIDList[questID] ) then
-				-- We lock the objective updates for half a second after accepting, this prevents
-				-- bad objective change data from happening
-				tempQuestLog[mapID].updateLock = time + 0.50
-				
-				self.questData[questID].sid = questGiverID
-				self.questData[questID].stype = questGiverType
+	for questID, mapID in pairs(tempQuestIDList) do
+		if( questGiverID and not questIDList[questID] ) then
+			self:RecordNPCLocation()
 
-				print(string.format("NPC %d starts quest %d", questGiverID, questID))
-				self:Debug(string.format("Accepted quest %s from %s (%s).", questID, questGiverID, questGiverType))
-			end
+			-- We lock the objective updates for half a second after accepting, this prevents
+			-- bad objective change data from happening
+			tempQuestLog[mapID].updateLock = time + 0.50
+
+			self.questData[questID].sid = questGiverID
+			self.questData[questID].stype = questGiverType
+
+			print(string.format("NPC %d starts quest %d", questGiverID, questID))
+			self:Debug(string.format("Accepted quest %s from %s (%s).", questID, questGiverID, questGiverType))
 		end
+	end
 
-		if( questFinished ) then
-			questFinished = nil
-			self:Debug(string.format("Checking if we finished a finished."))
-			
-			-- Found quests we completed
-			for questID, mapID in pairs(questIDList) do
-				if( not tempQuestIDList[questID] ) then
-					questLog[mapID].updateLock = time + 1
-					
-					self.questData[questID].eid = questGiverID
-					self.questData[questID].etype = questGiverType
+	-- Found quests we completed/abandoned
+	for questID, mapID in pairs(questIDList) do
+		if( not tempQuestIDList[questID] ) then
+			local questName = self:GetQuestName(questID)
+			if( questGiverID and ( not abandonedName or abandonedName ~= questName ) ) then
+				self:RecordNPCLocation()
 
-					print(string.format("NPC %d ends quest %d (%s)", self.questData[questID].eid, questID, questGiven))
-					self:Debug(string.format("Ended quest %s on %s (%s)", questID, questGiverID, questGiverType))
-				end
+				questLog[mapID].updateLock = time + 1
+
+				self.questData[questID].eid = questGiverID
+				self.questData[questID].etype = questGiverType
+
+				print(string.format("NPC %d ends quest %d (%s)", self.questData[questID].eid, questID, questGiven))
+				self:Debug(string.format("Ended quest %s on %s (%s)", questID, questGiverID, questGiverType))
+			elseif( abandonedName == questName ) then
+				print(string.format("Abandoned quest %s.", abandonedName))
+				self:Debug(string.format("Quest abandoned %s", abandonedName))
+				abandonedName = nil
+				break
 			end
 		end
 	end
@@ -284,7 +296,6 @@ function QDR:QUEST_COMPLETE(event)
 	questGiverID, questGiverType = self:GetMobID(UnitGUID("npc"))
 	questGiven = self:StripData(GetTitleText())
 	playerX, playerY, playerZone = self:GetPlayerPosition()
-	questFinished = true
 	
 	self:Debug(string.format("Event quest completed %s on %s (%s) flagged for finished.", questGiven, questGiverID, questGiverType))
 end
@@ -301,21 +312,18 @@ function QDR:QUEST_DETAIL(event)
 	end
 end
 
--- Flag so we know that the next quest log event has data we might want
-function QDR:QUEST_FINISHED(event)
-	if( questGiverID ) then
-		playerX, playerY, playerZone = self:GetPlayerPosition()
-		
-		-- Save this NPCs location
-		local zoneID = self.mapToID[playerZone]
-		self.npcData[questGiverID].type = questGiverType
-		table.insert(self.npcData[questGiverID].coords, zoneID)
-		table.insert(self.npcData[questGiverID].coords, playerX)
-		table.insert(self.npcData[questGiverID].coords, playerY)
-		
-		print(string.format("NPC %d (%s) is located at %.2f, %.2f in zone id %d.", questGiverID, questGiverType, playerX, playerY, zoneID))
-		self:Debug(string.format("Event quest finished, on %s (%s) at %.2f, %.2f.", questGiverID, questGiverType, playerX, playerY))
-	end
+function QDR:RecordNPCLocation()
+	playerX, playerY, playerZone = self:GetPlayerPosition()
+
+	-- Save this NPCs location
+	local zoneID = self.mapToID[playerZone]
+	self.npcData[questGiverID].type = questGiverType
+	table.insert(self.npcData[questGiverID].coords, zoneID)
+	table.insert(self.npcData[questGiverID].coords, playerX)
+	table.insert(self.npcData[questGiverID].coords, playerY)
+
+	print(string.format("NPC %d (%s) is located at %.2f, %.2f in zone id %d.", questGiverID, questGiverType, playerX, playerY, zoneID))
+	self:Debug(string.format("Event quest finished, on %s (%s) at %.2f, %.2f.", questGiverID, questGiverType, playerX, playerY))
 end
 
 function QDR:GetPlayerPosition()
@@ -358,6 +366,19 @@ function QDR:GetMobID(guid)
 	end
 	
 	return tonumber(string.sub(guid, 8, 12), 16), mobType
+end
+
+-- Quest name from ID
+function QDR:GetQuestName(questID)
+	if( not self.tooltip ) then
+		self.tooltip = CreateFrame("GameTooltip", "QuestDataRecTooltip", UIParent, "GameTooltipTemplate")
+		self.tooltip:SetOwner(UIParent, "ANCHOR_NONE")
+	end	
+	
+	self.tooltip:ClearLines()
+	self.tooltip:SetHyperlink(string.format("quest:%d", questID))
+	
+	return QuestDataRecTooltipTextLeft1:GetText()
 end
 
 -- SV is about to be written, take everything that we have and turn it into our storage format

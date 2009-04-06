@@ -97,7 +97,7 @@ end
 -- DEBUG (OBVIOUSLY)
 function QDR:Debug(msg)
 	if( self.db.log ) then
-		table.insert(self.db.log, string.format("[%s] %s", GetTime(), msg))
+		--table.insert(self.db.log, string.format("[%s] %s", GetTime(), msg))
 	end
 end
 
@@ -501,7 +501,7 @@ SlashCmdList["QUESTDATAREC"] = function(msg)
 			}
 		end
 		
-		StaticPopup_Show("TOMTOM_REMOVE_ALL_CONFIRM")
+		StaticPopup_Show("QUESTDATAREC_CONFIRM_RESET")
 	
 	elseif( msg == "stop" ) then
 		self.db.stopped = true

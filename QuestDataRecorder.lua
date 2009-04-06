@@ -1,13 +1,12 @@
 QDR = {}
 
 local L = QuestDataRecLocals
-local lootSelfFilter, lootSelfMultiFilter
-local playerX, playerY, playerZone, questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
-local tempQuestLog, tempQuestIDList, questLog, questIDList = {}, {}
-local questPatterns, factionRanks = {}
+local lootSelfFilter, lootSelfMultiFilter, questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
+local playerX, playerY, playerZone, questLog
+local tempQuestLog, questPatterns, factionRanks = {}, {}, {}
 
 function QDR:OnInitialize()
-	QuestDataRecDB = QuestDataRecDB or {stopped = false, npcData = {}, itemData = {}, questData = {}}
+	QuestDataRecDB = QuestDataRecDB or {stopped = false, npcData = {}, objectData = {}, itemData = {}, questData = {}}
 	self.db = QuestDataRecDB
 
 	self.questData = setmetatable({}, {
@@ -36,6 +35,21 @@ function QDR:OnInitialize()
 			end
 			
 			tbl[index] = loadstring("return " .. QDR.db.npcData[index])()
+			
+			return tbl[index]
+		end
+	})
+
+	self.objectData = setmetatable({}, {
+		__index = function(tbl, index)
+			tbl[index] = {coords = {}}
+			
+			-- No data is cached yet
+			if( not QDR.db.objectData[index] ) then
+				return tbl[index]
+			end
+			
+			tbl[index] = loadstring("return " .. QDR.db.objectData[index])()
 			
 			return tbl[index]
 		end
@@ -94,17 +108,6 @@ function QDR:OnInitialize()
 	end
 end
 
--- DEBUG (OBVIOUSLY)
-function QDR:Debug(msg)
-	if( self.db.log ) then
-		--table.insert(self.db.log, string.format("[%s] %s", GetTime(), msg))
-	end
-end
-
---[[
-	In 3.1, I might be able to use QUEST_ACCEPTED instead of QUEST_FINISHED. Although, it has the same limitations
-	with the NPC unitid becoming unusable so I still need to save info on QUEST_DETAIL.
-]]
 function QDR:StartRecording()
 	self.frame:RegisterEvent("QUEST_DETAIL")
 	self.frame:RegisterEvent("QUEST_LOG_UPDATE")
@@ -137,37 +140,14 @@ function QDR:CHAT_MSG_LOOT(event, msg)
 			table.insert(self.itemData[itemID].coords, self.mapToID[zone])
 			table.insert(self.itemData[itemID].coords, x)
 			table.insert(self.itemData[itemID].coords, y)
-
-			self:Debug(string.format("Item looted %d in %d at %.2f, %.2f.", itemID, self.mapToID[zone], x, y))
 		end
 	end
-end
-
-function QDR:Deformat(text)
-	text = string.gsub(text, "%.", "%%.")
-	text = string.gsub(text, "%%s", "(.+)")
-	text = string.gsub(text, "%%d", "([0-9]+)")
-	
-	return text
 end
 
 -- Quest log updated, see what changed quest-wise
 -- NTS: Redo this function to use two tables at most to make it more sane to work with
 function QDR:QUEST_LOG_UPDATE(event)
-	-- Reset our temp quest data first
-	for k in pairs(tempQuestIDList) do tempQuestIDList[k] = nil end
-	for _, data in pairs(tempQuestLog) do 
-		for _, objData in pairs(data.objectives) do
-			for k in pairs(objData) do
-				objData[k] = nil
-			end
-		end
-	end
-	
-	local time = GetTime()
-	
 	-- Scan quest log
-	local questID
 	local foundQuests = 0
 	local index = 1
 	local numQuests = select(2, GetNumQuestLogEntries())
@@ -178,28 +158,31 @@ function QDR:QUEST_LOG_UPDATE(event)
 		if( not isHeader ) then
 			foundQuests = foundQuests + 1
 			
-			questID = string.match(GetQuestLink(index), "|Hquest:(%d+):(%-?%d+)|h")
+			local questID = string.match(GetQuestLink(index), "|Hquest:(%d+):(%-?%d+)|h")
 			questID = tonumber(questID)
 			
-			tempQuestLog[foundQuests] = tempQuestLog[foundQuests] or {objectives = {}}
+			tempQuestLog[questID] = tempQuestLog[questID] or {objectives = {}}
 			
-			local questData = tempQuestLog[foundQuests]
-			questData.updateLock = 0
-			questData.questName = questName
-			questData.questID = questID
-			tempQuestIDList[questID] = foundQuests
-
+			local questData = tempQuestLog[questID]
+			questData.id = questID
+			questData.inactive = false
+			
+			-- Parse the leaderboard objectives to find the progress on the objectives
 			for objID=1, GetNumQuestLeaderBoards(index) do
 				local text, type, finished = GetQuestLogLeaderBoard(objID, index)
-				local current, max
+				local current, max = 0, 0
+				
+				-- Players slain: #/#
 				if( type == "player" ) then
 					current, max = string.match(text, questPatterns[type])
 					current = tonumber(current)
 					max = tonumber(max)
+				-- <faction>: <have> / <needed>
 				elseif( type == "reputation" ) then
 					local currentLevel, neededLevel = select(2, string.match(text, questPatterns[type]))
 					current = factionRanks[currentLevel]
 					max = factionRanks[neededLevel]
+				-- Remaining: <item/object> #/# & <name> slain: #/# (Or (%d+)/(%d+) if those fail)
 				elseif( questPatterns[type] ) then
 					current, max = select(2, string.match(text, questPatterns[type]))
 					if( not current or not max ) then
@@ -208,11 +191,12 @@ function QDR:QUEST_LOG_UPDATE(event)
 					
 					current = tonumber(current)
 					max = tonumber(max)
+				-- No number, it's just either completed or is not
 				else
 					max = 1
 					current = finished and 1 or 0
 				end
-								
+						
 				questData.objectives[objID] = questData.objectives[objID] or {}
 				questData.objectives[objID].text = text
 				questData.objectives[objID].type = type
@@ -225,156 +209,170 @@ function QDR:QUEST_LOG_UPDATE(event)
 		index = index + 1
 	end
 	
-	-- We don't have any previous data to go off of yet, so start us off
+	-- We don't have any previous data to go off of yet, store what we had
 	if( not questLog ) then
 		questLog = CopyTable(tempQuestLog)
-		questIDList = CopyTable(tempQuestIDList)
 		return
 	end
-	
-	local tempID = ""
-	local pID = ""
-	for k in pairs(tempQuestIDList) do tempID = tempID .. k .. ", " end
-	for k in pairs(questIDList) do pID = pID .. k .. ", " end
-	
-	self:Debug(string.format("Quests updated, found %s / had %s", tempID, pID))
 		
 	-- Find quests we accepted
-	for questID, mapID in pairs(tempQuestIDList) do
-		if( questGiverID and not questIDList[questID] ) then
-			self:RecordNPCLocation()
-
-			-- We lock the objective updates for half a second after accepting, this prevents
-			-- bad objective change data from happening
-			tempQuestLog[mapID].updateLock = time + 0.50
-
-			self.questData[questID].sid = questGiverID
-			self.questData[questID].stype = questGiverType
-
-			print(string.format("NPC %d starts quest %d", questGiverID, questID))
-			self:Debug(string.format("Accepted quest %s from %s (%s).", questID, questGiverID, questGiverType))
+	if( questGiverID ) then
+		for tempID, tempData in pairs(tempQuestLog) do
+			if( not questLog[tempID] ) then
+				self:RecordNPCLocation()
+				
+				self.questData[tempID].sid = questGiverID
+				self.questData[tempID].stype = questGiverType
+								
+				print(string.format("NPC %d starts quest %s (%d)", questGiverID, self:GetQuestName(tempID) or "?", tempID))
+			end
 		end
 	end
 
-	-- Found quests we completed/abandoned
-	for questID, mapID in pairs(questIDList) do
-		if( not tempQuestIDList[questID] ) then
+	-- Find quests we abandoned or accepted
+	for questID, questData in pairs(questLog) do
+		if( not tempQuestLog[questID] or tempQuestLog[questID].inactive ) then
 			local questName = self:GetQuestName(questID)
 			if( questGiverID and ( not abandonedName or abandonedName ~= questName ) ) then
 				self:RecordNPCLocation()
-
-				questLog[mapID].updateLock = time + 1
-
+				
 				self.questData[questID].eid = questGiverID
 				self.questData[questID].etype = questGiverType
 
-				print(string.format("NPC %d ends quest %d (%s)", self.questData[questID].eid, questID, questGiven))
-				self:Debug(string.format("Ended quest %s on %s (%s)", questID, questGiverID, questGiverType))
+				-- Remove our data on it then
+				questLog[questID] = nil
+				tempQuestLog[questID] = nil
+				
+				print(string.format("NPC %d ends quest %s (%d)", questGiverID, self:GetQuestName(questID) or "?", questID))
+				
 			elseif( abandonedName == questName ) then
 				print(string.format("Abandoned quest %s.", abandonedName))
-				self:Debug(string.format("Quest abandoned %s", abandonedName))
+				
+				questLog[questID] = nil
+				
 				abandonedName = nil
 				break
 			end
 		end
 	end
-		
-	-- Now find out what objectives changed
-	for questID, mapID in pairs(tempQuestIDList) do
+	
+	-- Check if an objective changed
+	for questID, tempData in pairs(tempQuestLog) do
 		-- We have this quest last update, so we can compare it
-		if( questIDList[questID] ) then
-			
-			local questData = questLog[questIDList[questID]]
-			if( questData.updateLock < time ) then
-				for objID, objData in pairs(tempQuestLog[mapID].objectives) do
-					if( questData.objectives[objID] and questData.objectives[objID].current and objData.current and questData.objectives[objID].current < objData.current ) then
-						local x, y, zone = self:GetPlayerPosition()
-						local zoneID = self.mapToID[zone]
+		local questData = questLog[questID]
+		if( questData ) then	
+			for objID, tempObjData in pairs(tempData.objectives) do
+				if( questData.objectives[objID] and questData.objectives[objID].current and tempObjData.current and questData.objectives[objID].current < tempObjData.current ) then
+					local x, y, zone = self:GetPlayerPosition()
+					local zoneID = self.mapToID[zone]
+					
+					self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {coords = {}}
 
-						self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {coords = {}}
-						self.questData[questID].objectives[objID].type = self.dataToID[objData.type]
-				
-						table.insert(self.questData[questID].objectives[objID].coords, zoneID)
-						table.insert(self.questData[questID].objectives[objID].coords, x)
-						table.insert(self.questData[questID].objectives[objID].coords, y)
+					local questObjective = self.questData[questID].objectives[objID]
+					questObjective.type = self.dataToID[tempObjData.type]
 
-						print(string.format("Recorded quest id %d, objective id %d (type %s), in %.2f, %.2f", questID, objID, objData.type, x, y))
-						self:Debug(string.format("Objectives changed \"%s\" %s for %d at %.2f, %.2f.", objData.text, objData.type, questID, x, y))
-					end
+					table.insert(questObjective.coords, zoneID)
+					table.insert(questObjective.coords, x)
+					table.insert(questObjective.coords, y)
+
+					print(string.format("Recorded quest %s (%d), objective id %d (type %s), in %.2f, %.2f", self:GetQuestName(questID) or "?", questID, objID, tempObjData.type, x, y))
 				end
 			end
 		end
 	end
-			
-	-- Reset what we had last time
-	for questID, mapID in pairs(questIDList) do
-		questIDList[questID] = nil
-	end
-	
-	for _, questData in pairs(questLog) do
-		questData.questName = nil
-		questData.questID = nil
-		
-		for id, data in pairs(questData.objectives) do
-			data.text = nil
-			data.type = nil
-			data.id = nil
-			data.finished = nil
-		end
-	end
-	
-	-- Now copy over the new stuff
-	for questID, mapID in pairs(tempQuestIDList) do
-		local questData = tempQuestLog[mapID]
-		questIDList[questID] = mapID
-		
-		questLog[mapID] = questLog[mapID] or {objectives = {}}
-		questLog[mapID].updateLock = questData.updateLock
-		questLog[mapID].questName = questData.questName
-		questLog[mapID].questID = questData.questID
+					
+	-- Copy data for next time + reset our temp data
+	for tempID, tempData in pairs(tempQuestLog) do
+		if( not tempData.inactive ) then
+			questLog[tempID] = questLog[tempID] or {objectives = {}}
 
-		for objID, data in pairs(questData.objectives) do
-			questLog[mapID].objectives[objID] = questLog[mapID].objectives[objID] or {}
-			
-			for k, v in pairs(data) do
-				questLog[mapID].objectives[objID][k] = v
+			-- Flag we haven't seen this yet, next update it'll be reset
+			tempData.inactive = true
+
+			local questData = questLog[tempID]
+			questData.id = tempData.id
+
+			for tempObjID, tempObjData in pairs(tempData.objectives) do
+				questData.objectives[tempObjID] = questData.objectives[tempObjID] or {}
+
+				-- Reset previous objective data
+				local objectives = questData.objectives[tempObjID]
+				-- Copy new one in
+				for key, value in pairs(tempObjData) do
+					objectives[key] = value
+					tempObjData[key] = nil
+				end
 			end
 		end
 	end
 end
 
-function QDR:QUEST_COMPLETE(event)
+function QDR:QuestProgress()
 	questGiverID, questGiverType = self:GetMobID(UnitGUID("npc"))
 	questGiven = self:StripData(GetTitleText())
-	playerX, playerY, playerZone = self:GetPlayerPosition()
 	
-	self:Debug(string.format("Event quest completed %s on %s (%s) flagged for finished.", questGiven, questGiverID, questGiverType))
+	-- We cannot get itemid from GUId, so we have to do an inventory scan to find what we want
+	if( questGiverType == self.dataToID.item ) then
+		questGiverID = nil
+		
+		-- Loop through bags
+		for bag=0, 4 do
+			-- Scanning a bag
+			for slot=1, GetContainerNumSlots(bag) do
+				local link = GetContainerItemLink(bag, slot)
+				if( link and GetItemInfo(link) == UnitName("npc") ) then
+					local itemID = string.match(link, "item:([0-9]+)")
+					questGiverID = tonumber(itemID)
+					break
+				end
+			end
+		end
+		
+		if( not questGiverID ) then
+			print(string.format("Failed to associate NPC id for %s (%s) to %s, cannot find item it was from.", (UnitName("npc")) or "?", questGiverType, questGiven))
+		end
+	end
+	
+	-- We store the player position here, because thats more accurate theres a slightly 0.5s-1s delay
+	-- before we see the quest was accepted
+	playerX, playerY, playerZone = self:GetPlayerPosition()
+end
+
+function QDR:QUEST_COMPLETE(event)
+	self:QuestProgress()
 end
 
 -- We're looking at the details of the quest, save the quest info so we can use it later
 function QDR:QUEST_DETAIL(event)
-	-- When a player shares a quest with another player, the npc unitid gives you data for the player
-	-- the quest was shared TO, not the player who SHARED the quest
-	if( not UnitIsPlayer("npc") ) then
-		questGiverID, questGiverType = self:GetMobID(UnitGUID("npc"))
-		self:Debug(string.format("Event quest details, on %s (%s)", questGiverID, questGiverType))
-	else
+	-- When a quest is shared with us, "npc" is actually the "player" unitid
+	if( UnitIsPlayer("npc") ) then
 		questGiverID = nil
+		return
 	end
+	
+	self:QuestProgress()
 end
 
 function QDR:RecordNPCLocation()
-	playerX, playerY, playerZone = self:GetPlayerPosition()
+	if( not self.mapToID[playerZone] ) then
+		print(string.format("Cannot record NPC location, cannot find an ID for %s (%.2f, %.2f)", playerZone, playerX, playerY))
+		return
+	end
+	
+	-- Save the location
+	local field = "objectData"
+	if( questGiverType == self.dataToID.npc ) then
+		field = "npcData"
+	end
+	
+	local data = self[field][questGiverID]
+	data.type = questGiverType
+	
+	table.insert(data.coords, self.mapToID[playerZone])
+	table.insert(data.coords, playerX)
+	table.insert(data.coords, playerY)
 
-	-- Save this NPCs location
-	local zoneID = self.mapToID[playerZone]
-	self.npcData[questGiverID].type = questGiverType
-	table.insert(self.npcData[questGiverID].coords, zoneID)
-	table.insert(self.npcData[questGiverID].coords, playerX)
-	table.insert(self.npcData[questGiverID].coords, playerY)
-
-	print(string.format("NPC %d (%s) is located at %.2f, %.2f in zone id %d.", questGiverID, questGiverType, playerX, playerY, zoneID))
-	self:Debug(string.format("Event quest finished, on %s (%s) at %.2f, %.2f.", questGiverID, questGiverType, playerX, playerY))
+	print(string.format("NPC %d (%s) is located at %.2f, %.2f in zone %s (%d).", questGiverID, questGiverType, playerX, playerY, playerZone, self.mapToID[playerZone]))
 end
 
 function QDR:GetPlayerPosition()
@@ -406,12 +404,14 @@ end
 -- Get the mob ID from GUID
 function QDR:GetMobID(guid)
 	if( not guid ) then return nil end
-	local type = bit.band(tonumber(string.sub(guid, 3, 5), 16), 0x00f)
+	local type = tonumber(string.sub(guid, 3, 5), 16)
 	local mobType
-	if( type == 1 ) then
+	if( type == 3857 ) then
 		mobType = self.dataToID.object
-	elseif( type == 3 ) then
+	elseif( type == 3859 ) then
 		mobType = self.dataToID.npc
+	elseif( type == 1024 ) then
+		mobType = self.dataToID.item
 	else
 		return nil
 	end
@@ -423,13 +423,21 @@ end
 function QDR:GetQuestName(questID)
 	if( not self.tooltip ) then
 		self.tooltip = CreateFrame("GameTooltip", "QuestDataRecTooltip", UIParent, "GameTooltipTemplate")
-		self.tooltip:SetOwner(UIParent, "ANCHOR_NONE")
 	end	
 	
 	self.tooltip:ClearLines()
+	self.tooltip:SetOwner(UIParent, "ANCHOR_NONE")
 	self.tooltip:SetHyperlink(string.format("quest:%d", questID))
 	
 	return QuestDataRecTooltipTextLeft1:GetText()
+end
+
+function QDR:Deformat(text)
+	text = string.gsub(text, "%.", "%%.")
+	text = string.gsub(text, "%%s", "(.+)")
+	text = string.gsub(text, "%%d", "([0-9]+)")
+	
+	return text
 end
 
 -- SV is about to be written, take everything that we have and turn it into our storage format
@@ -456,6 +464,16 @@ function QDR:PLAYER_LOGOUT()
 		end
 		
 		self.db.npcData[npcID] = string.format("{type=%d;coords={%s}}", npcData.type or 0, coords)
+	end
+
+	-- Save object data
+	for objectID, objectData in pairs(self.objectData) do
+		local coords = ""
+		for _, coordData in pairs(objectData.coords) do
+			coords = string.format("%s%s;", coords, coordData)
+		end
+		
+		self.db.objectData[objectID] = string.format("{type=%d;coords={%s}}", objectData.type or 0, coords)
 	end
 	
 	-- Save item data
@@ -489,9 +507,9 @@ SlashCmdList["QUESTDATAREC"] = function(msg)
 					QuestDataRecDB.questData = {}
 					QuestDataRecDB.itemData = {}
 
-					QDR.npcData = {}
-					QDR.questData = {}
-					QDR.itemData = {}
+					for k in pairs(QDR.npcData) do QDR.npcData[k] = nil end
+					for k in pairs(QDR.questData) do QDR.questData[k] = nil end
+					for k in pairs(QDR.itemData) do QDR.itemData[k] = nil end
 
 					QDR:Print(L["All recorded data has been reset."])
 				end,

@@ -357,6 +357,10 @@ function QDR:RecordNPCLocation()
 	if( not self.mapToID[playerZone] ) then
 		print(string.format("Cannot record NPC location, cannot find an ID for %s (%.2f, %.2f)", playerZone, playerX, playerY))
 		return
+	-- Location if it was started from an item needs to be pulled from itemData
+	elseif( questGiverType == self.dataToID.item ) then
+		print("Cannot record NPC location, as the quest is started from an item.")
+		return
 	end
 	
 	-- Save the location

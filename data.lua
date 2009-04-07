@@ -100,3 +100,9 @@ QDR.dataToID = {
 	["event"] = 6,
 	["player"] = 7,
 }
+
+-- This is mainly for debug purposes
+QDR.idToData = {}
+for key, value in pairs(QDR.dataToID) do
+	QDR.idToData[value] = key
+end

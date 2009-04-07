@@ -3,7 +3,7 @@ QDR = {}
 local L = QuestDataRecLocals
 local lootSelfFilter, lootSelfMultiFilter, questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
 local playerX, playerY, playerZone, questLog
-local tempQuestLog, questPatterns, factionRanks = {}, {}, {}
+local tempQuestLog, tempQuestItems, questPatterns, factionRanks, questItemsLost, questItemsGained, questItems = {}, {}, {}, {}, {}, {}, {}
 
 function QDR:OnInitialize()
 	QuestDataRecDB = QuestDataRecDB or {stopped = false, npcData = {}, objectData = {}, itemData = {}, questData = {}}
@@ -113,6 +113,7 @@ function QDR:StartRecording()
 	self.frame:RegisterEvent("QUEST_LOG_UPDATE")
 	self.frame:RegisterEvent("QUEST_COMPLETE")
 	self.frame:RegisterEvent("CHAT_MSG_LOOT")
+	self.frame:RegisterEvent("BAG_UPDATE")
 end
 
 function QDR:StopRecording()
@@ -120,6 +121,51 @@ function QDR:StopRecording()
 	self.frame:UnregisterEvent("QUEST_LOG_UPDATE")
 	self.frame:UnregisterEvent("QUEST_COMPLETE")
 	self.frame:UnregisterEvent("CHAT_MSG_LOOT")
+	self.frame:UnregisterEvent("BAG_UPDATE")
+end
+
+function QDR:BAG_UPDATE()
+	for k in pairs(tempQuestItems) do tempQuestItems[k] = nil end
+	
+	-- Load all quest items in the players bag
+	for bag=0, 4 do
+		for slot=1, GetContainerNumSlots(bag) do
+			local link = GetContainerItemLink(bag, slot)
+			if( link ) then
+				local itemType, subType = select(6, GetItemInfo(link))
+				if( itemType == "Quest" and subType == "Quest" ) then
+					local count = select(2, GetContainerItemInfo(bag, slot))
+					local itemID = string.match(link, "item:([0-9]+)")
+
+					tempQuestItems[tonumber(itemID)] = count
+				end
+			end
+		end
+	end
+		
+	local timeout = GetTime() + 0.20
+	-- Lost a quest item
+	for itemID, count in pairs(questItems) do
+		if( not tempQuestItems[itemID] or tempQuestItems[itemID] < count ) then
+			questItemsLost[itemID] = timeout
+		end
+	end
+
+	-- Gained a quest item
+	for itemID, count in pairs(tempQuestItems) do
+		if( not questItems[itemID] or questItems[itemID] < count ) then
+			questItemsGained[itemID] = timeout
+		end
+	end
+
+	-- Copy data in
+	for key in pairs(questItems) do
+		questItems[key] = nil
+	end
+	
+	for itemID, count in pairs(tempQuestItems) do
+		questItems[itemID] = count
+	end
 end
 
 function QDR:CHAT_MSG_LOOT(event, msg)
@@ -257,6 +303,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 	end
 	
 	-- Check if an objective changed
+	local time = GetTime()
 	for questID, tempData in pairs(tempQuestLog) do
 		-- We have this quest last update, so we can compare it
 		local questData = questLog[questID]
@@ -269,13 +316,41 @@ function QDR:QUEST_LOG_UPDATE(event)
 					self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {coords = {}}
 
 					local questObjective = self.questData[questID].objectives[objID]
+					questObjective.dropitems = questObjective.dropitems or {}
+					questObjective.recitems = questObjective.recitems or {}
 					questObjective.type = self.dataToID[tempObjData.type]
 
 					table.insert(questObjective.coords, zoneID)
 					table.insert(questObjective.coords, x)
 					table.insert(questObjective.coords, y)
+					
+					print(string.format("Recorded quest %s (%d), objective id %d (type %s), at %.2f, %.2f", self:GetQuestName(questID) or "?", questID, objID, tempObjData.type, x, y))
 
-					print(string.format("Recorded quest %s (%d), objective id %d (type %s), in %.2f, %.2f", self:GetQuestName(questID) or "?", questID, objID, tempObjData.type, x, y))
+					-- Do we have an item that should be associated?
+					for itemID, timeout in pairs(questItemsLost) do
+						if( time < timeout ) then
+							if( not questObjective.dropitems[itemID] ) then
+								print(string.format("Lost item %s (%d), associating it with being a dropped item for the objective of %d.", (GetItemInfo("item:" .. itemID)), itemID, questID))
+							end
+							
+							questObjective.dropitems[itemID] = true
+						end
+						
+						questItemsLost[itemID] = nil
+					end
+
+					-- Do we have an item that should be associated?
+					for itemID, timeout in pairs(questItemsGained) do
+						if( time < timeout ) then
+							if( not questObjective.recitems[itemID] ) then
+								print(string.format("Gained item %s (%d), associating it with being an objective of %d.", (GetItemInfo("item:" .. itemID)), itemID, questID))
+							end
+							
+							questObjective.recitems[itemID] = true
+						end
+						
+						questItemsGained[itemID] = nil
+					end
 				end
 			end
 		end
@@ -454,7 +529,18 @@ function QDR:PLAYER_LOGOUT()
 			for _, coordData in pairs(objData.coords) do
 				coords = string.format("%s%s;", coords, coordData)
 			end
-			objectives = string.format("%s[%d]={type=%d;coords={%s}};", objectives, objID, objData.type or 0, coords)
+			
+			local receivedItems = ""
+			for itemID in pairs(objData.recitems) do
+				receivedItems = string.format("%s[%s] = true;", receivedItems, itemID)
+			end
+			
+			local droppedItems = ""
+			for itemID in pairs(objData.dropitems) do
+				droppedItems = string.format("%s[%s] = true;", droppedItems, itemID)
+			end
+			
+			objectives = string.format("%s[%d]={type=%d;recitems={%s};dropitems={%s};coords={%s}};", objectives, objID, objData.type or 0, receivedItems, droppedItems, coords)
 		end
 		
 		self.db.questData[questID] = string.format("{stype=%d;sid=%d;etype=%d;eid=%d;objectives={%s}}", questData.stype or 0, questData.sid or 0, questData.etype or 0, questData.eid or 0, objectives)
@@ -556,6 +642,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
 		QDR[event](QDR, event, ...)
 	end
 end)
+frame:Hide()
 
 -- Random output
 function QDR:Print(msg)

@@ -188,7 +188,7 @@ function QDR:CHAT_MSG_LOOT(event, msg)
 		local x, y, zone = self:GetPlayerPosition()
 
 		itemID = tonumber(itemID)
-
+		
 		table.insert(self.itemData[itemID].coords, self.mapToID[zone])
 		table.insert(self.itemData[itemID].coords, x)
 		table.insert(self.itemData[itemID].coords, y)
@@ -495,6 +495,11 @@ function QDR:GetPlayerPosition()
 	x, y = GetPlayerMapPosition("player")
 	zone = GetMapInfo()
 	SetMapZoom(currentCont, currentZone)
+	
+	-- Players in an instance, and no coords found so no map for it
+	if( x == 0 and y == 0 and IsInInstance() ) then
+		return 0, 0, "instance"
+	end
 
 	return tonumber(string.format("%.2f", x * 100)), tonumber(string.format("%.2f", y * 100)), zone
 end

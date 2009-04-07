@@ -2,6 +2,7 @@ if( not QDR ) then return end
 
 QDR.mapToID = {
 	-- Instance maps
+	["instance"] = 99,
 	["WarsongGulch"] = 1,
 	["AlteracValley"] = 2,
 	["ArathiBasin"] = 3,

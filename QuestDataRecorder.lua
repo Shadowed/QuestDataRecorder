@@ -7,7 +7,7 @@ local tempQuestLog, tempQuestItems, questPatterns, factionRanks = {}, {}, {}, {}
 local isQuestItem, questItemsLost, questItemsGained, questItems = {}, {}, {}, {}
 
 function QDR:OnInitialize()
-	QuestDataRecDB = QuestDataRecDB or {debug = false, stopped = false, npcData = {}, objectData = {}, itemData = {}, questData = {}}
+	QuestDataRecDB = QuestDataRecDB or {debugLevel = 0, logs = {}, stopped = false, npcData = {}, objectData = {}, itemData = {}, questData = {}}
 	self.db = QuestDataRecDB
 
 	self.questData = setmetatable({}, {
@@ -115,6 +115,8 @@ function QDR:StartRecording()
 	self.frame:RegisterEvent("QUEST_COMPLETE")
 	self.frame:RegisterEvent("CHAT_MSG_LOOT")
 	self.frame:RegisterEvent("BAG_UPDATE")
+	self.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+	self.frame:RegisterEvent("PLAYER_LEAVING_WORLD")
 end
 
 function QDR:StopRecording()
@@ -123,12 +125,27 @@ function QDR:StopRecording()
 	self.frame:UnregisterEvent("QUEST_COMPLETE")
 	self.frame:UnregisterEvent("CHAT_MSG_LOOT")
 	self.frame:UnregisterEvent("BAG_UPDATE")
+	self.frame:UnregisterEvent("PLAYER_ENTERING_WORLD")
+	self.frame:UnregisterEvent("PLAYER_LEAVING_WORLD")
 end
 
-function QDR:Debug(text, ...)
-	if( self.db.debug ) then
+function QDR:Debug(level, text, ...)
+	if( self.db.debugLevel == 0 ) then
+		return
+	elseif( level <= self.db.debugLevel  ) then
 		print(string.format(text, ...))
+		table.insert(self.db.logs, string.format(text, ...))
+	else
+		table.insert(self.db.logs, string.format(text, ...))
 	end
+end
+
+function QDR:PLAYER_ENTERING_WORLD()
+	self.frame:RegisterEvent("BAG_UPDATE")
+end
+
+function QDR:PLAYER_LEAVING_WORLD()
+	self.frame:UnregisterEvent("BAG_UPDATE")
 end
 
 -- Record quest item association
@@ -143,7 +160,7 @@ function QDR:BAG_UPDATE()
 				local count = select(2, GetContainerItemInfo(bag, slot))
 				local itemID = string.match(link, "item:([0-9]+)")
 
-				tempQuestItems[tonumber(itemID)] = count
+				tempQuestItems[tonumber(itemID)] = (tempQuestItems[tonumber(itemID)] or 0) + count
 			end
 		end
 	end
@@ -153,7 +170,7 @@ function QDR:BAG_UPDATE()
 	for itemID, count in pairs(questItems) do
 		if( not tempQuestItems[itemID] or tempQuestItems[itemID] < count ) then
 			questItemsLost[itemID] = timeout
-			self:Debug("[%s] Lost quest item %d, we had %d of it before.", GetTime(), itemID, tempQuestItems[itemID] or 0)
+			self:Debug(2, "[%s] Lost quest item %d, we had %d of it before.", GetTime(), itemID, tempQuestItems[itemID] or 0)
 		end
 	end
 
@@ -161,7 +178,7 @@ function QDR:BAG_UPDATE()
 	for itemID, count in pairs(tempQuestItems) do
 		if( not questItems[itemID] or questItems[itemID] < count ) then
 			questItemsGained[itemID] = timeout
-			self:Debug("[%s] Gained quest item %d, we had %d of it before.", GetTime(), itemID, questItems[itemID] or 0)
+			self:Debug(2, "[%s] Gained quest item %d, we had %d of it before.", GetTime(), itemID, questItems[itemID] or 0)
 		end
 	end
 
@@ -302,7 +319,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 				self.questData[tempID].sid = questGiverID
 				self.questData[tempID].stype = questGiverType
 				
-				self:Debug("%s ID %d starts %s (%d).", self.idToData[questGiverType], questGiverID, self:GetQuestName(tempID) or "?", tempID)
+				self:Debug(1, "%s ID %d starts %s (%d).", self.idToData[questGiverType], questGiverID, self:GetQuestName(tempID) or "?", tempID)
 			end
 		end
 	end
@@ -321,9 +338,9 @@ function QDR:QUEST_LOG_UPDATE(event)
 				questLog[questID] = nil
 				tempQuestLog[questID] = nil
 				
-				self:Debug("%s ID %d ends %s (%d).", self.idToData[questGiverType], questGiverID, self:GetQuestName(questID) or "?", questID)
+				self:Debug(1, "%s ID %d ends %s (%d).", self.idToData[questGiverType], questGiverID, self:GetQuestName(questID) or "?", questID)
 			elseif( abandonedName == questName ) then
-				self:Debug("Abandoned %s.", abandonedName)
+				self:Debug(2, "Abandoned %s.", abandonedName)
 				
 				questLog[questID] = nil
 				abandonedName = nil
@@ -354,13 +371,13 @@ function QDR:QUEST_LOG_UPDATE(event)
 					table.insert(questObjective.coords, x)
 					table.insert(questObjective.coords, y)
 					
-					self:Debug("[%s] Objective %d (%s) changed for %s (%d) at %.2f, %.2f.", GetTime(), objID, tempObjData.type, self:GetQuestName(questID) or "?", questID, x, y)
+					self:Debug(1, "[%s] Objective %d (%s) changed for %s (%d) at %.2f, %.2f.", GetTime(), objID, tempObjData.type, self:GetQuestName(questID) or "?", questID, x, y)
 
 					-- Do we have an item that should be associated?
 					for itemID, timeout in pairs(questItemsLost) do
 						if( time < timeout ) then
 							if( not questObjective.dropitems[itemID] ) then
-								self:Debug("Associating item id %d as an objective of %d, as it was removed from inventory.", itemID, objID)
+								self:Debug(2, "Associating item id %d as an objective of %d, as it was removed from inventory.", itemID, objID)
 							end
 							
 							questObjective.dropitems[itemID] = true
@@ -373,7 +390,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 					for itemID, timeout in pairs(questItemsGained) do
 						if( time < timeout ) then
 							if( not questObjective.recitems[itemID] ) then
-								self:Debug("Associating item id %d as an objective of %d, as it was put into the inventory.", itemID, objID)
+								self:Debug(2, "Associating item id %d as an objective of %d, as it was put into the inventory.", itemID, objID)
 							end
 							
 							questObjective.recitems[itemID] = true
@@ -434,7 +451,7 @@ function QDR:QuestProgress()
 		end
 		
 		if( not questGiverID ) then
-			self:Debug("Failed to associate NPC id for %s (%s) to %s, cannot find the item it was from.", (UnitName("npc")) or "?", questGiverType, questGiven)
+			self:Debug(1, "Failed to associate NPC id for %s (%s) to %s, cannot find the item it was from.", (UnitName("npc")) or "?", questGiverType, questGiven)
 		end
 	end
 	
@@ -461,11 +478,11 @@ end
 function QDR:RecordNPCLocation()
 	-- Location if it was started from an item needs to be pulled from itemData
 	if( questGiverType == self.dataToID.item ) then
-		self:Debug("Not recording location, as this quest was started by an item.")
+		self:Debug(2, "Not recording location, as this quest was started by an item.")
 		return
 	-- No map data yet
 	elseif( not self.mapToID[playerZone] ) then
-		self:Debug("Cannot record the location of NPC, no map id found for %s (%.2f, %.2f)", playerZone, playerX, playerY)
+		self:Debug(1, "Cannot record the location of NPC, no map id found for %s (%.2f, %.2f)", playerZone, playerX, playerY)
 		return
 	end
 	
@@ -482,7 +499,7 @@ function QDR:RecordNPCLocation()
 	table.insert(data.coords, playerX)
 	table.insert(data.coords, playerY)
 
-	self:Debug("Found %s id %d at %.2f, %.2f in zone %s (%d).", self.idToData[questGiverType], questGiverID, playerX, playerY, playerZone, self.mapToID[playerZone])
+	self:Debug(1, "Found %s id %d at %.2f, %.2f in zone %s (%d).", self.idToData[questGiverType], questGiverID, playerX, playerY, playerZone, self.mapToID[playerZone])
 end
 
 function QDR:GetPlayerPosition()
@@ -568,12 +585,12 @@ function QDR:PLAYER_LOGOUT()
 			
 			local receivedItems = ""
 			for itemID in pairs(objData.recitems) do
-				receivedItems = string.format("%s[%s] = true;", receivedItems, itemID)
+				receivedItems = string.format("%s[%s]=true;", receivedItems, itemID)
 			end
 			
 			local droppedItems = ""
 			for itemID in pairs(objData.dropitems) do
-				droppedItems = string.format("%s[%s] = true;", droppedItems, itemID)
+				droppedItems = string.format("%s[%s]=true;", droppedItems, itemID)
 			end
 			
 			objectives = string.format("%s[%d]={type=%d;recitems={%s};dropitems={%s};coords={%s}};", objectives, objID, objData.type or 0, receivedItems, droppedItems, coords)

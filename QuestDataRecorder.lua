@@ -313,7 +313,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 	-- Find quests we accepted
 	if( questGiverID ) then
 		for tempID, tempData in pairs(tempQuestLog) do
-			if( not questLog[tempID] ) then
+			if( not tempData.inactive and not questLog[tempID] ) then
 				self:RecordNPCLocation()
 				
 				self.questData[tempID].sid = questGiverID
@@ -343,6 +343,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 				self:Debug(2, "Abandoned %s.", abandonedName)
 				
 				questLog[questID] = nil
+				
 				abandonedName = nil
 				break
 			end

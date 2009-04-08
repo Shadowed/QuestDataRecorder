@@ -7,9 +7,39 @@ local tempQuestLog, tempQuestItems, questPatterns, factionRanks = {}, {}, {}, {}
 local isQuestItem, questItemsLost, questItemsGained, questItems = {}, {}, {}, {}
 
 function QDR:OnInitialize()
-	QuestDataRecDB = QuestDataRecDB or {debugLevel = 0, logs = {}, stopped = false, npcData = {}, objectData = {}, itemData = {}, questData = {}}
+	QuestDataRecDB = QuestDataRecDB or {}
 	self.db = QuestDataRecDB
 
+	local defaults = {stopped = false, debugLevel = 0, logs = {}, npcdata = {}, objectdata = {}, itemdata = {}, questdata = {}}
+	for key, value in pairs(defaults) do
+		if( QuestDataRecDB[key] == nil ) then
+			if( type(value) == "table" ) then
+				QuestDataRecDB[key] = CopyTable(value)
+			else
+				QuestDataRecDB[key] = value
+			end
+		end
+	end
+	
+	-- Upgrade
+	if( QuestDataRecDB.itemData ) then
+		QuestDataRecDB.itemdata = CopyTable(QuestDataRecDB.itemData)
+		QuestDataRecDB.itemData = nil		
+	end
+	if( QuestDataRecDB.npcData ) then
+		QuestDataRecDB.npcdata = CopyTable(QuestDataRecDB.npcData)
+		QuestDataRecDB.npcData = nil
+	end
+	if( QuestDataRecDB.questData ) then
+		QuestDataRecDB.questdata = CopyTable(QuestDataRecDB.questData)
+		QuestDataRecDB.questData = nil
+	end
+	if( QuestDataRecDB.objectData ) then
+		QuestDataRecDB.objectdata = CopyTable(QuestDataRecDB.objectData)
+		QuestDataRecDB.objectData = nil
+	end
+	
+	
 	self.questData = setmetatable({}, {
 		__index = function(tbl, index)
 			tbl[index] = {objectives = {}}
@@ -20,7 +50,7 @@ function QDR:OnInitialize()
 			end
 			
 			
-			tbl[index] = loadstring("return " .. QDR.db.questData[index])()
+			tbl[index] = loadstring("return " .. QDR.db.questdata[index])()
 
 			return tbl[index]
 		end
@@ -35,7 +65,7 @@ function QDR:OnInitialize()
 				return tbl[index]
 			end
 			
-			tbl[index] = loadstring("return " .. QDR.db.npcData[index])()
+			tbl[index] = loadstring("return " .. QDR.db.npcdata[index])()
 			
 			return tbl[index]
 		end
@@ -50,7 +80,7 @@ function QDR:OnInitialize()
 				return tbl[index]
 			end
 			
-			tbl[index] = loadstring("return " .. QDR.db.objectData[index])()
+			tbl[index] = loadstring("return " .. QDR.db.objectdata[index])()
 			
 			return tbl[index]
 		end
@@ -65,7 +95,7 @@ function QDR:OnInitialize()
 				return tbl[index]
 			end
 			
-			tbl[index] = loadstring("return " .. QDR.db.itemData[index])()
+			tbl[index] = loadstring("return " .. QDR.db.itemdata[index])()
 			
 			return tbl[index]
 		end
@@ -597,7 +627,7 @@ function QDR:PLAYER_LOGOUT()
 			objectives = string.format("%s[%d]={type=%d;recitems={%s};reagitems={%s};coords={%s}};", objectives, objID, objData.type or 0, receivedItems, reageantItems, coords)
 		end
 		
-		self.db.questData[questID] = string.format("{stype=%d;sid=%d;etype=%d;eid=%d;objectives={%s}}", questData.stype or 0, questData.sid or 0, questData.etype or 0, questData.eid or 0, objectives)
+		self.db.questdata[questID] = string.format("{stype=%d;sid=%d;etype=%d;eid=%d;objectives={%s}}", questData.stype or 0, questData.sid or 0, questData.etype or 0, questData.eid or 0, objectives)
 	end
 	
 	-- Save NPC data
@@ -607,7 +637,7 @@ function QDR:PLAYER_LOGOUT()
 			coords = string.format("%s%s;", coords, coordData)
 		end
 		
-		self.db.npcData[npcID] = string.format("{type=%d;coords={%s}}", npcData.type or 0, coords)
+		self.db.npcdata[npcID] = string.format("{type=%d;coords={%s}}", npcData.type or 0, coords)
 	end
 
 	-- Save object data
@@ -617,7 +647,7 @@ function QDR:PLAYER_LOGOUT()
 			coords = string.format("%s%s;", coords, coordData)
 		end
 		
-		self.db.objectData[objectID] = string.format("{type=%d;coords={%s}}", objectData.type or 0, coords)
+		self.db.objectdata[objectID] = string.format("{type=%d;coords={%s}}", objectData.type or 0, coords)
 	end
 	
 	-- Save item data
@@ -628,7 +658,7 @@ function QDR:PLAYER_LOGOUT()
 			coords = string.format("%s%s;", coords, coordData)
 		end
 		
-		self.db.itemData[itemID] = string.format("{coords={%s}}", coords)
+		self.db.itemdata[itemID] = string.format("{coords={%s}}", coords)
 	end
 end
 

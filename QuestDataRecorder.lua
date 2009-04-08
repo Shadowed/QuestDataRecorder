@@ -134,9 +134,9 @@ function QDR:Debug(level, text, ...)
 		return
 	elseif( level <= self.db.debugLevel  ) then
 		print(string.format(text, ...))
-		table.insert(self.db.logs, string.format(text, ...))
+		table.insert(self.db.logs, string.format("[%s] " .. text, GetTime(), ...))
 	else
-		table.insert(self.db.logs, string.format(text, ...))
+		table.insert(self.db.logs, string.format("[%s] " .. text, GetTime(), ...))
 	end
 end
 
@@ -170,7 +170,7 @@ function QDR:BAG_UPDATE()
 	for itemID, count in pairs(questItems) do
 		if( not tempQuestItems[itemID] or tempQuestItems[itemID] < count ) then
 			questItemsLost[itemID] = timeout
-			self:Debug(2, "[%s] Lost quest item %d, we had %d of it before.", GetTime(), itemID, tempQuestItems[itemID] or 0)
+			self:Debug(2, "Lost quest item %d, we had %d of it before.", itemID, tempQuestItems[itemID] or 0)
 		end
 	end
 
@@ -178,7 +178,7 @@ function QDR:BAG_UPDATE()
 	for itemID, count in pairs(tempQuestItems) do
 		if( not questItems[itemID] or questItems[itemID] < count ) then
 			questItemsGained[itemID] = timeout
-			self:Debug(2, "[%s] Gained quest item %d, we had %d of it before.", GetTime(), itemID, questItems[itemID] or 0)
+			self:Debug(2, "Gained quest item %d, we had %d of it before.", itemID, questItems[itemID] or 0)
 		end
 	end
 
@@ -363,7 +363,7 @@ function QDR:QUEST_LOG_UPDATE(event)
 					self.questData[questID].objectives[objID] = self.questData[questID].objectives[objID] or {coords = {}}
 
 					local questObjective = self.questData[questID].objectives[objID]
-					questObjective.dropitems = questObjective.dropitems or {}
+					questObjective.reagitems = questObjective.reagitems or {}
 					questObjective.recitems = questObjective.recitems or {}
 					questObjective.type = self.dataToID[tempObjData.type]
 
@@ -371,16 +371,16 @@ function QDR:QUEST_LOG_UPDATE(event)
 					table.insert(questObjective.coords, x)
 					table.insert(questObjective.coords, y)
 					
-					self:Debug(1, "[%s] Objective %d (%s) changed for %s (%d) at %.2f, %.2f.", GetTime(), objID, tempObjData.type, self:GetQuestName(questID) or "?", questID, x, y)
+					self:Debug(1, "Objective %d (%s) changed for %s (%d) at %.2f, %.2f.", objID, tempObjData.type, self:GetQuestName(questID) or "?", questID, x, y)
 
 					-- Do we have an item that should be associated?
 					for itemID, timeout in pairs(questItemsLost) do
 						if( time < timeout ) then
-							if( not questObjective.dropitems[itemID] ) then
+							if( not questObjective.reagitems[itemID] ) then
 								self:Debug(2, "Associating item id %d as an objective of %d, as it was removed from inventory.", itemID, objID)
 							end
 							
-							questObjective.dropitems[itemID] = true
+							questObjective.reagitems[itemID] = true
 						end
 						
 						questItemsLost[itemID] = nil
@@ -588,12 +588,12 @@ function QDR:PLAYER_LOGOUT()
 				receivedItems = string.format("%s[%s]=true;", receivedItems, itemID)
 			end
 			
-			local droppedItems = ""
-			for itemID in pairs(objData.dropitems) do
-				droppedItems = string.format("%s[%s]=true;", droppedItems, itemID)
+			local reageantItems = ""
+			for itemID in pairs(objData.reagitems) do
+				reageantItems = string.format("%s[%s]=true;", droppedItems, itemID)
 			end
 			
-			objectives = string.format("%s[%d]={type=%d;recitems={%s};dropitems={%s};coords={%s}};", objectives, objID, objData.type or 0, receivedItems, droppedItems, coords)
+			objectives = string.format("%s[%d]={type=%d;recitems={%s};reagitems={%s};coords={%s}};", objectives, objID, objData.type or 0, receivedItems, reageantItems, coords)
 		end
 		
 		self.db.questData[questID] = string.format("{stype=%d;sid=%d;etype=%d;eid=%d;objectives={%s}}", questData.stype or 0, questData.sid or 0, questData.etype or 0, questData.eid or 0, objectives)

@@ -665,7 +665,14 @@ function QDR:PLAYER_LOGOUT()
 			coords = string.format("%s%s;", coords, coordData)
 		end
 		
-		self.db.npcdata[npcID] = string.format("{type=%d;coords={%s}}", npcData.type or 0, coords)
+		local items = ""
+		if( npcData.items ) then
+			for _, itemData in pairs(npcData.items) do
+				items = string.format("%s%s;", items, itemData)
+			end
+		end
+		
+		self.db.npcdata[npcID] = string.format("{type=%d;items={%s};coords={%s}}", npcData.type or 0, items, coords)
 	end
 
 	-- Save object data
@@ -680,7 +687,6 @@ function QDR:PLAYER_LOGOUT()
 	
 	-- Save item data
 	for itemID, itemData in pairs(self.itemData) do
-		local storage = ""
 		local coords = ""
 		for _, coordData in pairs(itemData.coords) do
 			coords = string.format("%s%s;", coords, coordData)

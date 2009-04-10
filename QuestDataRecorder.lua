@@ -1,9 +1,9 @@
 QDR = {}
 
 local L = QuestDataRecLocals
-local lootSelfFilter, lootSelfMultiFilter, questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
-local playerX, playerY, playerZone, questLog
-local tempQuestLog, tempQuestItems, questPatterns, factionRanks = {}, {}, {}, {}
+local questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
+local lootNpcID, playerX, playerY, playerZone, questLog
+local tempQuestLog, tempQuestItems, questPatterns, factionRanks, lootList = {}, {}, {}, {}, {}
 local isQuestItem, questItemsLost, questItemsGained, questItems = {}, {}, {}, {}
 
 function QDR:OnInitialize()
@@ -21,25 +21,6 @@ function QDR:OnInitialize()
 			end
 		end
 	end
-	
-	-- Upgrade
-	if( QuestDataRecDB.itemData ) then
-		QuestDataRecDB.itemdata = CopyTable(QuestDataRecDB.itemData)
-		QuestDataRecDB.itemData = nil		
-	end
-	if( QuestDataRecDB.npcData ) then
-		QuestDataRecDB.npcdata = CopyTable(QuestDataRecDB.npcData)
-		QuestDataRecDB.npcData = nil
-	end
-	if( QuestDataRecDB.questData ) then
-		QuestDataRecDB.questdata = CopyTable(QuestDataRecDB.questData)
-		QuestDataRecDB.questData = nil
-	end
-	if( QuestDataRecDB.objectData ) then
-		QuestDataRecDB.objectdata = CopyTable(QuestDataRecDB.objectData)
-		QuestDataRecDB.objectData = nil
-	end
-	
 	
 	self.questData = setmetatable({}, {
 		__index = function(tbl, index)
@@ -101,11 +82,7 @@ function QDR:OnInitialize()
 			return tbl[index]
 		end
 	})
-	
-	-- Loot patterns
-	lootSelfFilter = self:Deformat(LOOT_ITEM_SELF)
-	lootSelfMultiFilter = self:Deformat(LOOT_ITEM_SELF_MULTIPLE)
-	
+		
 	-- Quest patterns
 	questPatterns.reputation = self:Deformat(QUEST_FACTION_NEEDED)
 	questPatterns.item = self:Deformat(QUEST_ITEMS_NEEDED)
@@ -144,17 +121,21 @@ function QDR:StartRecording()
 	self.frame:RegisterEvent("QUEST_DETAIL")
 	self.frame:RegisterEvent("QUEST_LOG_UPDATE")
 	self.frame:RegisterEvent("QUEST_COMPLETE")
-	self.frame:RegisterEvent("CHAT_MSG_LOOT")
-	self.frame:RegisterEvent("BAG_UPDATE")
+	self.frame:RegisterEvent("LOOT_OPENED")
+	self.frame:RegisterEvent("LOOT_CLOSED")
+	self.frame:RegisterEvent("LOOT_SLOT_CLEARED")
 	self.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self.frame:RegisterEvent("PLAYER_LEAVING_WORLD")
+	self.frame:RegisterEvent("BAG_UPDATE")
 end
 
 function QDR:StopRecording()
 	self.frame:UnregisterEvent("QUEST_DETAIL")
 	self.frame:UnregisterEvent("QUEST_LOG_UPDATE")
 	self.frame:UnregisterEvent("QUEST_COMPLETE")
-	self.frame:UnregisterEvent("CHAT_MSG_LOOT")
+	self.frame:UnregisterEvent("LOOT_OPENED")
+	self.frame:UnregisterEvent("LOOT_CLOSED")
+	self.frame:UnregisterEvent("LOOT_SLOT_CLEARED")
 	self.frame:UnregisterEvent("BAG_UPDATE")
 	self.frame:UnregisterEvent("PLAYER_ENTERING_WORLD")
 	self.frame:UnregisterEvent("PLAYER_LEAVING_WORLD")
@@ -171,6 +152,72 @@ function QDR:Debug(level, text, ...)
 	end
 end
 
+function QDR:LOOT_OPENED()
+	-- If the target exists, is dead, not a player, and it's an actual NPC then we will say we're looting that NPC
+	if( UnitExists("target") and UnitIsDead("target") and not UnitIsPlayer("target") ) then
+		local npcID, npcType = self:GetMobID(UnitGUID("target"))
+		if( npcType == self.dataToID.npc ) then
+			lootNpcID = npcID
+		end
+	end
+	
+	-- Record all the items on this NPC
+	for i=1, GetNumLootItems() do
+		lootList[i] = GetLootSlotLink(i)
+	end
+end
+
+-- We looted an item off of the NPC
+function QDR:LOOT_SLOT_CLEARED(event, slot)
+	if( not lootList[slot] ) then
+		return
+	end
+	
+	local link = lootList[slot]
+	lootList[slot] = nil
+
+	if( not self:IsQuestItem(link) ) then
+		return
+	end
+	
+	-- Record the item loot location
+	local itemID = string.match(link, "item:([0-9]+)")
+	local x, y, zone = self:GetPlayerPosition()
+
+	itemID = tonumber(itemID)
+
+	table.insert(self.itemData[itemID].coords, self.mapToID[zone])
+	table.insert(self.itemData[itemID].coords, x)
+	table.insert(self.itemData[itemID].coords, y)
+	
+	-- If we have an NPC ID then associate the npc with dropping that item
+	if( lootNpcID ) then
+		self:Debug(1, "Looted itemid %d from npc %d in %s at %.2f, %.2f.", itemID, lootNpcID, zone, x, y)
+
+		self.npcData[lootNpcID].items = self.npcData[lootNpcID].items or {}
+		
+		for _, dropID in pairs(self.npcData[lootNpcID].items) do
+			if( itemID == dropID ) then
+				return
+			end
+		end
+		
+		table.insert(self.npcData[lootNpcID].items, itemID)
+		self:Debug(1, "Associated the NPC %d with dropping %d.", lootNpcID, itemID)
+	else
+		self:Debug(1, "Looted itemid %d in %s at %.2f, %.2f.", itemID, zone, x, y)
+	end
+end
+
+function QDR:LOOT_CLOSED()
+	lootNpcID = nil
+	
+	for id in pairs(lootList) do
+		lootList[id] = nil
+	end
+end
+
+-- Stop bag updates while we are entering/leaving the world
 function QDR:PLAYER_ENTERING_WORLD()
 	self.frame:RegisterEvent("BAG_UPDATE")
 end
@@ -178,166 +225,6 @@ end
 function QDR:PLAYER_LEAVING_WORLD()
 	self.frame:UnregisterEvent("BAG_UPDATE")
 end
-
---[[
-function QDR:Compress()
-	--[ [
-		Converting decimals to whole numbers accounts for ~4% of the total compression
-		Renaming fields to a shorter one is 8-12%
-		Number mapping anything over 3 characters that occures >= 3 times is another 8%-12%
-		LibCompress is around 40%
-		overall it works out to 40% lib compress/20% everything else/60% total
-		
-		Everything takes <0.25 seconds, except for decimal conversion which can be half a second to a second.
-	] ]
-
-	local DBSize = {}
-	local DBTime = {}
-	DBTime.create = GetTime()
-
-	local DB = "{"
-	for field, tbl in pairs(QuestDataRecDB) do
-		if( field ~= "logs" and type(tbl) == "table" ) then
-			-- All of the keys in the main table are strings, so we don't need to wrap them
-			DB = string.format("%s%s={", DB, field)
-			
-			-- Now copy all of the content of these tables in
-			for key, value in pairs(tbl) do
-				DB = string.format("%s[%d]=%s;", DB, key, value)
-			end
-
-			DB = DB .. "}"
-		end
-	end
-
-	DB = DB .. "}"
-	DBTime.createEnd = GetTime()
-	
-	-- Start tracking size
-	DBSize.start = string.len(DB)
-	
-	DBTime.convert = GetTime()
-	-- Convert all decimals into a whole number, saves a character at best (saves nothing at worse if it's 25.5)
-	local numbers = {}
-	for whole, decimal in string.gmatch(DB, "([0-9]+)%.([0-9]+)") do
-		local num = tonumber(whole .. "." .. decimal)
-		numbers[num * 100] = num
-	end
-
-	-- 25.85 -> 2585
-	for fix, num in pairs(numbers) do
-		DB = string.gsub(DB, ";" .. num .. ";", ";" .. fix .. ";")
-	end
-	
-	DBTime.convertEnd = GetTime()
-	DBTime.rename = GetTime()
-
-	-- Rename fields into something that uses less characters
-	local fieldConversion = {
-		["coords="] = "c=",
-		["type="] = "t=",
-		["objectives="] = "obj=",
-		["reagitems="] = "rgi=",
-		["recitems="] = "rci=",
-		[";}"] = "}",
-	}
-	
-	for find, replace in pairs(fieldConversion) do
-		DB = string.gsub(DB, find, replace)
-	end
-	
-	-- Remove any empty tables
-	DB = string.gsub(DB, "([a-z]+)={}", "")
-	
-	DBSize.basic = string.len(DB)
-	DBTime.renameEnd = GetTime()
-	DBTime.map = GetTime()
-	
-	-- Build a mapping to reduce the size of numbers that occur a lot
-	local numbers = {}
-	for num in string.gmatch(DB, "([0-9]+)") do
-		if( string.len(num) >= 3 ) then
-			numbers[num] = (numbers[num] or 0) + 1
-		end
-	end
-	
-	local mapDB = "{map={"
-	local alphaTable = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"}
-	local mainIndex = 1
-	local secondIndex = 0
-	local usingSecond
-	
-	local sortTbl = {}
-	for num, occured in pairs(numbers) do
-		if( occured >= 3 ) then
-			table.insert(sortTbl, num)
-		end
-	end
-	
-	table.sort(sortTbl, function(a, b)
-		return numbers[a] > numbers[b]
-	end)
-	
-	for _, number in pairs(sortTbl) do
-		local id = alphaTable[mainIndex]
-		if( usingSecond ) then
-			id = id .. alphaTable[secondIndex]
-		end
-
-		-- Store the mapping
-		mapDB = string.format("%s%s=%d", mapDB, id, number)
-		-- Now convert it to our map
-		DB = string.gsub(DB, number, id)
-
-		if( secondIndex >= #(alphaTable) ) then
-			secondIndex = 0
-			mainIndex = mainIndex + 1
-
-			if( mainIndex > #(alphaTable) ) then
-				break
-			end
-
-		elseif( mainIndex >= #(alphaTable) ) then
-			mainIndex = 1
-			secondIndex = 1
-			usingSecond = true
-		end
-
-		if( not usingSecond ) then
-			mainIndex = mainIndex + 1
-		else
-			secondIndex = secondIndex + 1
-		end
-	end
-	
-	if( mapDB == "{map={" ) then
-		mapDB = ""
-	else
-		mapDB = string.format("%s}", mapDB)
-	end
-	
-	DBTime.mapEnd = GetTime()
-	DB = string.format("%s%s", mapDB, DB)
-	DBSize.map = string.len(DB)
-	DBSize.mapSize = string.len(mapDB)
-	DBTime.compress = GetTime()
-	DBSize.compressed = string.len(LibStub("LibCompress"):Compress(DB))
-	DBTime.compressEnd = GetTime()
-	
-	print(string.format("Started at %d characters", DBSize.start))
-	print(string.format("Basic compression took it to %d characters (%.2f%% compression)", DBSize.basic, 100 - (DBSize.basic / DBSize.start * 100)))
-	if( DBSize.map ) then
-		print(string.format("Mapping numbers took it to %d characters, with the map using %d (%.2f%% compression)", DBSize.map, DBSize.mapSize, 100 - (DBSize.map / DBSize.basic * 100)))
-		print(string.format("LibCompress took it to %d characters (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.map) * 100))
-		print(string.format("Total characters %d (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.start) * 100))
-	else
-		print(string.format("LibCompress took it to %d characters (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.basic) * 100))
-		print(string.format("Total characters %d (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.start) * 100))
-	end
-
-	print(string.format("Total %.2f seconds: %.2f creation + %.2f conversion + %.2f renaming + %.2f mapping + %.2f compression.", DBTime.compressEnd - DBTime.create, DBTime.create - DBTime.createEnd, DBTime.convertEnd - DBTime.convert, DBTime.renameEnd - DBTime.rename, DBTime.mapEnd - DBTime.map, DBTime.compressEnd - DBTime.compress))
-end
-]]
 
 -- Record quest item association
 function QDR:BAG_UPDATE()
@@ -380,26 +267,6 @@ function QDR:BAG_UPDATE()
 	
 	for itemID, count in pairs(tempQuestItems) do
 		questItems[itemID] = count
-	end
-end
-
--- Record item loot
-function QDR:CHAT_MSG_LOOT(event, msg)
-	local itemLink = string.match(msg, lootSelfFilter)
-	if( not itemLink ) then
-		itemLink = string.match(msg, lootSelfMultiFilter)
-	end
-	
-	-- Got loot to parse
-	if( self:IsQuestItem(itemLink) ) then
-		local itemID = string.match(itemLink, "item:([0-9]+)")
-		local x, y, zone = self:GetPlayerPosition()
-
-		itemID = tonumber(itemID)
-		
-		table.insert(self.itemData[itemID].coords, self.mapToID[zone])
-		table.insert(self.itemData[itemID].coords, x)
-		table.insert(self.itemData[itemID].coords, y)
 	end
 end
 
@@ -705,8 +572,8 @@ function QDR:GetPlayerPosition()
 	zone = GetMapInfo()
 	SetMapZoom(currentCont, currentZone)
 	
-	-- Players in an instance, and no coords found so no map for it
-	if( x == 0 and y == 0 and IsInInstance() ) then
+	-- In an instance without a map, or we don't have the map for the instance yet.
+	if( IsInInstance() and ( x == 0 and y == 0 or not self.mapToID[zone] ) ) then
 		return 0, 0, "instance"
 	end
 
@@ -897,3 +764,164 @@ end
 function QDR:Echo(msg)
 	DEFAULT_CHAT_FRAME:AddMessage(msg)
 end
+
+
+--[[
+function QDR:Compress()
+	--[ [
+		Converting decimals to whole numbers accounts for ~4% of the total compression
+		Renaming fields to a shorter one is 8-12%
+		Number mapping anything over 3 characters that occures >= 3 times is another 8%-12%
+		LibCompress is around 40%
+		overall it works out to 40% lib compress/20% everything else/60% total
+		
+		Everything takes <0.25 seconds, except for decimal conversion which can be half a second to a second.
+	] ]
+
+	local DBSize = {}
+	local DBTime = {}
+	DBTime.create = GetTime()
+
+	local DB = "{"
+	for field, tbl in pairs(QuestDataRecDB) do
+		if( field ~= "logs" and type(tbl) == "table" ) then
+			-- All of the keys in the main table are strings, so we don't need to wrap them
+			DB = string.format("%s%s={", DB, field)
+			
+			-- Now copy all of the content of these tables in
+			for key, value in pairs(tbl) do
+				DB = string.format("%s[%d]=%s;", DB, key, value)
+			end
+
+			DB = DB .. "}"
+		end
+	end
+
+	DB = DB .. "}"
+	DBTime.createEnd = GetTime()
+	
+	-- Start tracking size
+	DBSize.start = string.len(DB)
+	
+	DBTime.convert = GetTime()
+	-- Convert all decimals into a whole number, saves a character at best (saves nothing at worse if it's 25.5)
+	local numbers = {}
+	for whole, decimal in string.gmatch(DB, "([0-9]+)%.([0-9]+)") do
+		local num = tonumber(whole .. "." .. decimal)
+		numbers[num * 100] = num
+	end
+
+	-- 25.85 -> 2585
+	for fix, num in pairs(numbers) do
+		DB = string.gsub(DB, ";" .. num .. ";", ";" .. fix .. ";")
+	end
+	
+	DBTime.convertEnd = GetTime()
+	DBTime.rename = GetTime()
+
+	-- Rename fields into something that uses less characters
+	local fieldConversion = {
+		["coords="] = "c=",
+		["type="] = "t=",
+		["objectives="] = "obj=",
+		["reagitems="] = "rgi=",
+		["recitems="] = "rci=",
+		[";}"] = "}",
+	}
+	
+	for find, replace in pairs(fieldConversion) do
+		DB = string.gsub(DB, find, replace)
+	end
+	
+	-- Remove any empty tables
+	DB = string.gsub(DB, "([a-z]+)={}", "")
+	
+	DBSize.basic = string.len(DB)
+	DBTime.renameEnd = GetTime()
+	DBTime.map = GetTime()
+	
+	-- Build a mapping to reduce the size of numbers that occur a lot
+	local numbers = {}
+	for num in string.gmatch(DB, "([0-9]+)") do
+		if( string.len(num) >= 3 ) then
+			numbers[num] = (numbers[num] or 0) + 1
+		end
+	end
+	
+	local mapDB = "{map={"
+	local alphaTable = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"}
+	local mainIndex = 1
+	local secondIndex = 0
+	local usingSecond
+	
+	local sortTbl = {}
+	for num, occured in pairs(numbers) do
+		if( occured >= 3 ) then
+			table.insert(sortTbl, num)
+		end
+	end
+	
+	table.sort(sortTbl, function(a, b)
+		return numbers[a] > numbers[b]
+	end)
+	
+	for _, number in pairs(sortTbl) do
+		local id = alphaTable[mainIndex]
+		if( usingSecond ) then
+			id = id .. alphaTable[secondIndex]
+		end
+
+		-- Store the mapping
+		mapDB = string.format("%s%s=%d", mapDB, id, number)
+		-- Now convert it to our map
+		DB = string.gsub(DB, number, id)
+
+		if( secondIndex >= #(alphaTable) ) then
+			secondIndex = 0
+			mainIndex = mainIndex + 1
+
+			if( mainIndex > #(alphaTable) ) then
+				break
+			end
+
+		elseif( mainIndex >= #(alphaTable) ) then
+			mainIndex = 1
+			secondIndex = 1
+			usingSecond = true
+		end
+
+		if( not usingSecond ) then
+			mainIndex = mainIndex + 1
+		else
+			secondIndex = secondIndex + 1
+		end
+	end
+	
+	if( mapDB == "{map={" ) then
+		mapDB = ""
+	else
+		mapDB = string.format("%s}", mapDB)
+	end
+	
+	DBTime.mapEnd = GetTime()
+	DB = string.format("%s%s", mapDB, DB)
+	DBSize.map = string.len(DB)
+	DBSize.mapSize = string.len(mapDB)
+	DBTime.compress = GetTime()
+	DBSize.compressed = string.len(LibStub("LibCompress"):Compress(DB))
+	DBTime.compressEnd = GetTime()
+	
+	print(string.format("Started at %d characters", DBSize.start))
+	print(string.format("Basic compression took it to %d characters (%.2f%% compression)", DBSize.basic, 100 - (DBSize.basic / DBSize.start * 100)))
+	if( DBSize.map ) then
+		print(string.format("Mapping numbers took it to %d characters, with the map using %d (%.2f%% compression)", DBSize.map, DBSize.mapSize, 100 - (DBSize.map / DBSize.basic * 100)))
+		print(string.format("LibCompress took it to %d characters (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.map) * 100))
+		print(string.format("Total characters %d (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.start) * 100))
+	else
+		print(string.format("LibCompress took it to %d characters (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.basic) * 100))
+		print(string.format("Total characters %d (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.start) * 100))
+	end
+
+	print(string.format("Total %.2f seconds: %.2f creation + %.2f conversion + %.2f renaming + %.2f mapping + %.2f compression.", DBTime.compressEnd - DBTime.create, DBTime.create - DBTime.createEnd, DBTime.convertEnd - DBTime.convert, DBTime.renameEnd - DBTime.rename, DBTime.mapEnd - DBTime.map, DBTime.compressEnd - DBTime.compress))
+end
+]]

@@ -2,8 +2,8 @@ QDR = {}
 
 local L = QuestDataRecLocals
 local questGiverID, questGiven, questGiverType, setToAbandon, abandonedName
-local lootNpcID, playerX, playerY, playerZone, questLog
-local tempQuestLog, tempQuestItems, questPatterns, factionRanks, lootList = {}, {}, {}, {}, {}
+local playerX, playerY, playerZone, questLog
+local tempQuestLog, tempQuestItems, questPatterns, factionRanks, lootedGUID = {}, {}, {}, {}, {}
 local isQuestItem, questItemsLost, questItemsGained, questItems = {}, {}, {}, {}
 
 function QDR:OnInitialize()
@@ -122,8 +122,6 @@ function QDR:StartRecording()
 	self.frame:RegisterEvent("QUEST_LOG_UPDATE")
 	self.frame:RegisterEvent("QUEST_COMPLETE")
 	self.frame:RegisterEvent("LOOT_OPENED")
-	self.frame:RegisterEvent("LOOT_CLOSED")
-	self.frame:RegisterEvent("LOOT_SLOT_CLEARED")
 	self.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self.frame:RegisterEvent("PLAYER_LEAVING_WORLD")
 	self.frame:RegisterEvent("BAG_UPDATE")
@@ -134,8 +132,6 @@ function QDR:StopRecording()
 	self.frame:UnregisterEvent("QUEST_LOG_UPDATE")
 	self.frame:UnregisterEvent("QUEST_COMPLETE")
 	self.frame:UnregisterEvent("LOOT_OPENED")
-	self.frame:UnregisterEvent("LOOT_CLOSED")
-	self.frame:UnregisterEvent("LOOT_SLOT_CLEARED")
 	self.frame:UnregisterEvent("BAG_UPDATE")
 	self.frame:UnregisterEvent("PLAYER_ENTERING_WORLD")
 	self.frame:UnregisterEvent("PLAYER_LEAVING_WORLD")
@@ -154,66 +150,57 @@ end
 
 function QDR:LOOT_OPENED()
 	-- If the target exists, is dead, not a player, and it's an actual NPC then we will say we're looting that NPC
-	if( UnitExists("target") and UnitIsDead("target") and not UnitIsPlayer("target") ) then
-		local npcID, npcType = self:GetMobID(UnitGUID("target"))
+	local npcID
+	local guid = UnitGUID("target")
+	if( guid and UnitExists("target") and UnitIsDead("target") and not UnitIsPlayer("target") ) then
+		-- We already looted this corpse
+		if( lootedGUID[guid] ) then
+			return
+		end
+		
+		lootedGUID[guid] = true
+
+		-- Make sure the GUID is actually an NPC ones
+		local id, npcType = self:GetMobID(guid)
 		if( npcType == self.dataToID.npc ) then
-			lootNpcID = npcID
+			npcID = id
 		end
 	end
-	
+		
 	-- Record all the items on this NPC
 	for i=1, GetNumLootItems() do
-		lootList[i] = GetLootSlotLink(i)
-	end
-end
+		local link = GetLootSlotLink(i)
+		if( self:IsQuestItem(link) ) then
+			print("Looted quest item", link)
 
--- We looted an item off of the NPC
-function QDR:LOOT_SLOT_CLEARED(event, slot)
-	if( not lootList[slot] ) then
-		return
-	end
-	
-	local link = lootList[slot]
-	lootList[slot] = nil
+			-- Record the item loot location
+			local itemID = string.match(link, "item:([0-9]+)")
+			local x, y, zone = self:GetPlayerPosition()
 
-	if( not self:IsQuestItem(link) ) then
-		return
-	end
-	
-	-- Record the item loot location
-	local itemID = string.match(link, "item:([0-9]+)")
-	local x, y, zone = self:GetPlayerPosition()
+			itemID = tonumber(itemID)
 
-	itemID = tonumber(itemID)
+			table.insert(self.itemData[itemID].coords, self.mapToID[zone])
+			table.insert(self.itemData[itemID].coords, x)
+			table.insert(self.itemData[itemID].coords, y)
 
-	table.insert(self.itemData[itemID].coords, self.mapToID[zone])
-	table.insert(self.itemData[itemID].coords, x)
-	table.insert(self.itemData[itemID].coords, y)
-	
-	-- If we have an NPC ID then associate the npc with dropping that item
-	if( lootNpcID ) then
-		self:Debug(1, "Looted itemid %d from npc %d in %s at %.2f, %.2f.", itemID, lootNpcID, zone, x, y)
+			-- If we have an NPC ID then associate the npc with dropping that item
+			if( npcID ) then
+				self:Debug(1, "Looted itemid %d from npc %d in %s at %.2f, %.2f.", itemID, npcID, zone, x, y)
 
-		self.npcData[lootNpcID].items = self.npcData[lootNpcID].items or {}
-		
-		for _, dropID in pairs(self.npcData[lootNpcID].items) do
-			if( itemID == dropID ) then
-				return
+				self.npcData[npcID].items = self.npcData[npcID].items or {}
+
+				for _, dropID in pairs(self.npcData[npcID].items) do
+					if( itemID == dropID ) then
+						return
+					end
+				end
+
+				table.insert(self.npcData[npcID].items, itemID)
+				self:Debug(1, "Associated the NPC %d with dropping %d.", npcID, itemID)
+			else
+				self:Debug(1, "Looted itemid %d in %s at %.2f, %.2f.", itemID, zone, x, y)
 			end
 		end
-		
-		table.insert(self.npcData[lootNpcID].items, itemID)
-		self:Debug(1, "Associated the NPC %d with dropping %d.", lootNpcID, itemID)
-	else
-		self:Debug(1, "Looted itemid %d in %s at %.2f, %.2f.", itemID, zone, x, y)
-	end
-end
-
-function QDR:LOOT_CLOSED()
-	lootNpcID = nil
-	
-	for id in pairs(lootList) do
-		lootList[id] = nil
 	end
 end
 

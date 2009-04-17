@@ -152,6 +152,7 @@ function QDR:LOOT_OPENED()
 	-- If the target exists, is dead, not a player, and it's an actual NPC then we will say we're looting that NPC
 	local npcID
 	local guid = UnitGUID("target")
+	print(guid, UnitExists("target"), UnitIsDead("target"), UnitIsPlayer("target"), (guid and tostring(lootedGUID[guid]) or "false"))
 	if( guid and UnitExists("target") and UnitIsDead("target") and not UnitIsPlayer("target") ) then
 		-- We already looted this corpse
 		if( lootedGUID[guid] ) then
@@ -185,10 +186,11 @@ function QDR:LOOT_OPENED()
 
 			-- If we have an NPC ID then associate the npc with dropping that item
 			if( npcID ) then
-				self:Debug(1, "Looted itemid %d from npc %d in %s at %.2f, %.2f.", itemID, npcID, zone, x, y)
+				self:Debug(1, "Looted itemid %d from npc %d in %s at %.2f, %.2f.", itemID, npcID, self.mapToID[zone], x, y)
 
 				self.npcData[npcID].items = self.npcData[npcID].items or {}
 
+				-- Already recorded it
 				for _, dropID in pairs(self.npcData[npcID].items) do
 					if( itemID == dropID ) then
 						return
@@ -198,7 +200,7 @@ function QDR:LOOT_OPENED()
 				table.insert(self.npcData[npcID].items, itemID)
 				self:Debug(1, "Associated the NPC %d with dropping %d.", npcID, itemID)
 			else
-				self:Debug(1, "Looted itemid %d in %s at %.2f, %.2f.", itemID, zone, x, y)
+				self:Debug(1, "Looted itemid %d in %s at %.2f, %.2f.", itemID, self.mapToID[zone], x, y)
 			end
 		end
 	end
@@ -586,10 +588,10 @@ function QDR:GetMobID(guid)
 	local mobType
 	if( type == 3857 ) then
 		mobType = self.dataToID.object
-	elseif( type == 3859 ) then
-		mobType = self.dataToID.npc
 	elseif( type == 1024 ) then
 		mobType = self.dataToID.item
+	elseif( bit.band(tonumber(string.sub(guid, 3, 5), 16), 0x00f) == 3 ) then
+		mobType = self.dataToID.npc
 	else
 		return nil
 	end

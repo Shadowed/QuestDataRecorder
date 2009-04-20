@@ -715,6 +715,8 @@ SlashCmdList["QUESTDATAREC"] = function(msg)
 		
 		StaticPopup_Show("QUESTDATAREC_CONFIRM_RESET")
 	
+	elseif( msg == "export" ) then
+		self:ExportData()
 	elseif( msg == "stop" ) then
 		self.db.stopped = true
 		self:Print(L["Quest recording has been stopped until you start it again."])
@@ -727,6 +729,7 @@ SlashCmdList["QUESTDATAREC"] = function(msg)
 		self:Echo(L["/qdr reset - Resets the saved quest database"])
 		self:Echo(L["/qdr stop - Stop recording quest data, you will have to manually start it back up."])
 		self:Echo(L["/qdr start - Start recording quest data"])
+		self:Echo(L["/qdr export - Allows you to export recorded quest data to the website."])
 	end
 end
 
@@ -757,10 +760,120 @@ function QDR:Echo(msg)
 	DEFAULT_CHAT_FRAME:AddMessage(msg)
 end
 
+function QDR:ExportData()
+	local startTime = GetTime()
 
---[[
+	self:CreateExportFrame()
+	self.guiFrame:Show()
+	self.guiFrame.title:SetText("Put web site URL here and such.")
+	self.guiFrame.editBox:SetText(self:Compress())
+	
+	self:Debug(1, "Took %.2f seconds to initialize the edit box, and compress data.", GetTime() - startTime)
+end
+
+function QDR:CreateExportFrame()
+	if( self.guiFrame ) then
+		return
+	end
+	
+	local backdrop = {
+		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+		edgeFile = "Interface\\ChatFrame\\ChatFrameBackground",
+		tile = true,
+		edgeSize = 1,
+		tileSize = 5,
+		insets = {left = 1, right = 1, top = 1, bottom = 1}
+	}
+
+	self.guiFrame = CreateFrame("Frame", nil, UIParent)
+	self.guiFrame:SetWidth(550)
+	self.guiFrame:SetHeight(275)
+	self.guiFrame:SetBackdrop(backdrop)
+	self.guiFrame:SetBackdropColor(0.0, 0.0, 0.0, 1.0)
+	self.guiFrame:SetBackdropBorderColor(0.65, 0.65, 0.65, 1.0)
+	self.guiFrame:SetMovable(true)
+	self.guiFrame:EnableMouse(true)
+	self.guiFrame:SetFrameStrata("HIGH")
+	self.guiFrame:Hide()
+
+	-- Fix edit box size
+	self.guiFrame:SetScript("OnShow", function(self)
+		self.child:SetHeight(self.scroll:GetHeight())
+		self.child:SetWidth(self.scroll:GetWidth())
+		self.editBox:SetWidth(self.scroll:GetWidth())
+	end)
+	
+	-- Select all text
+	self.guiFrame.copy = CreateFrame("Button", nil, self.guiFrame, "UIPanelButtonGrayTemplate")
+	self.guiFrame.copy:SetWidth(70)
+	self.guiFrame.copy:SetHeight(18)
+	self.guiFrame.copy:SetText(L["Select all"])
+	self.guiFrame.copy:SetPoint("TOPLEFT", self.guiFrame, "TOPLEFT", 1, -1)
+	self.guiFrame.copy:SetScript("OnClick", function(self)
+		self.editBox:SetFocus()
+		self.editBox:SetCursorPosition(0)
+		self.editBox:HighlightText(0)
+	end)
+	
+	-- Title info
+	self.guiFrame.title = self.guiFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+	self.guiFrame.title:SetPoint("TOPLEFT", self.guiFrame, "TOPLEFT", 75, -4)
+	
+	-- Close button (Shocking!)
+	local button = CreateFrame("Button", nil, self.guiFrame, "UIPanelCloseButton")
+	button:SetPoint("TOPRIGHT", self.guiFrame, "TOPRIGHT", 6, 6)
+	button:SetScript("OnClick", function()
+		HideUIPanel(self.guiFrame)
+	end)
+	
+	self.guiFrame.closeButton = button
+	
+	-- Create the container frame for the scroll box
+	local container = CreateFrame("Frame", nil, self.guiFrame)
+	container:SetHeight(265)
+	container:SetWidth(1)
+	container:ClearAllPoints()
+	container:SetPoint("BOTTOMLEFT", self.guiFrame, 0, -9)
+	container:SetPoint("BOTTOMRIGHT", self.guiFrame, 4, 0)
+	
+	self.guiFrame.container = container
+	
+	-- Scroll frame
+	local scroll = CreateFrame("ScrollFrame", "QDRFrameScroll", container, "UIPanelScrollFrameTemplate")
+	scroll:SetPoint("TOPLEFT", 5, 0)
+	scroll:SetPoint("BOTTOMRIGHT", -28, 10)
+	
+	self.guiFrame.scroll = scroll
+	
+	local child = CreateFrame("Frame", nil, scroll)
+	scroll:SetScrollChild(child)
+	child:SetHeight(2)
+	child:SetWidth(2)
+	
+	self.guiFrame.child = child
+
+	-- Create the actual edit box
+	local editBox = CreateFrame("EditBox", nil, child)
+	editBox:SetPoint("TOPLEFT")
+	editBox:SetHeight(50)
+	editBox:SetWidth(50)
+
+	editBox:SetMultiLine(true)
+	editBox:SetAutoFocus(false)
+	editBox:EnableMouse(true)
+	editBox:SetFontObject(GameFontHighlightSmall)
+	editBox:SetTextInsets(0, 0, 0, 0)
+	editBox:SetScript("OnEscapePressed", editBox.ClearFocus)
+	scroll:SetScript("OnMouseUp", function() editBox:SetFocus() end)	
+
+	self.guiFrame.editBox = editBox
+	self.guiFrame.copy.editBox = editBox
+
+	self.guiFrame:SetPoint("CENTER", UIParent, "CENTER")
+end
+
 function QDR:Compress()
-	--[ [
+	--[[
 		Converting decimals to whole numbers accounts for ~4% of the total compression
 		Renaming fields to a shorter one is 8-12%
 		Number mapping anything over 3 characters that occures >= 3 times is another 8%-12%
@@ -768,11 +881,7 @@ function QDR:Compress()
 		overall it works out to 40% lib compress/20% everything else/60% total
 		
 		Everything takes <0.25 seconds, except for decimal conversion which can be half a second to a second.
-	] ]
-
-	local DBSize = {}
-	local DBTime = {}
-	DBTime.create = GetTime()
+	]]
 
 	local DB = "{"
 	for field, tbl in pairs(QuestDataRecDB) do
@@ -790,34 +899,20 @@ function QDR:Compress()
 	end
 
 	DB = DB .. "}"
-	DBTime.createEnd = GetTime()
 	
-	-- Start tracking size
-	DBSize.start = string.len(DB)
+	-- Debug
+	local startCharacters = string.len(DB)
+	local startTime = GetTime()
+	self:Debug(1, "Starting to compress quest data, initial characters %d, time is %s.", startCharacters, startTime)
 	
-	DBTime.convert = GetTime()
-	-- Convert all decimals into a whole number, saves a character at best (saves nothing at worse if it's 25.5)
-	local numbers = {}
-	for whole, decimal in string.gmatch(DB, "([0-9]+)%.([0-9]+)") do
-		local num = tonumber(whole .. "." .. decimal)
-		numbers[num * 100] = num
-	end
-
-	-- 25.85 -> 2585
-	for fix, num in pairs(numbers) do
-		DB = string.gsub(DB, ";" .. num .. ";", ";" .. fix .. ";")
-	end
-	
-	DBTime.convertEnd = GetTime()
-	DBTime.rename = GetTime()
-
 	-- Rename fields into something that uses less characters
 	local fieldConversion = {
 		["coords="] = "c=",
 		["type="] = "t=",
-		["objectives="] = "obj=",
-		["reagitems="] = "rgi=",
-		["recitems="] = "rci=",
+		["objectives="] = "o=",
+		["questdata="] = "q=",
+		["recitems="] = "reci=",
+		["reagitems="] = "reai=",
 		[";}"] = "}",
 	}
 	
@@ -827,10 +922,6 @@ function QDR:Compress()
 	
 	-- Remove any empty tables
 	DB = string.gsub(DB, "([a-z]+)={}", "")
-	
-	DBSize.basic = string.len(DB)
-	DBTime.renameEnd = GetTime()
-	DBTime.map = GetTime()
 	
 	-- Build a mapping to reduce the size of numbers that occur a lot
 	local numbers = {}
@@ -864,7 +955,7 @@ function QDR:Compress()
 		end
 
 		-- Store the mapping
-		mapDB = string.format("%s%s=%d", mapDB, id, number)
+		mapDB = string.format("%s%s=%d;", mapDB, id, number)
 		-- Now convert it to our map
 		DB = string.gsub(DB, number, id)
 
@@ -895,25 +986,11 @@ function QDR:Compress()
 		mapDB = string.format("%s}", mapDB)
 	end
 	
-	DBTime.mapEnd = GetTime()
 	DB = string.format("%s%s", mapDB, DB)
-	DBSize.map = string.len(DB)
-	DBSize.mapSize = string.len(mapDB)
-	DBTime.compress = GetTime()
-	DBSize.compressed = string.len(LibStub("LibCompress"):Compress(DB))
-	DBTime.compressEnd = GetTime()
 	
-	print(string.format("Started at %d characters", DBSize.start))
-	print(string.format("Basic compression took it to %d characters (%.2f%% compression)", DBSize.basic, 100 - (DBSize.basic / DBSize.start * 100)))
-	if( DBSize.map ) then
-		print(string.format("Mapping numbers took it to %d characters, with the map using %d (%.2f%% compression)", DBSize.map, DBSize.mapSize, 100 - (DBSize.map / DBSize.basic * 100)))
-		print(string.format("LibCompress took it to %d characters (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.map) * 100))
-		print(string.format("Total characters %d (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.start) * 100))
-	else
-		print(string.format("LibCompress took it to %d characters (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.basic) * 100))
-		print(string.format("Total characters %d (%.2f%% compression)", DBSize.compressed, 100 - (DBSize.compressed / DBSize.start) * 100))
-	end
-
-	print(string.format("Total %.2f seconds: %.2f creation + %.2f conversion + %.2f renaming + %.2f mapping + %.2f compression.", DBTime.compressEnd - DBTime.create, DBTime.create - DBTime.createEnd, DBTime.convertEnd - DBTime.convert, DBTime.renameEnd - DBTime.rename, DBTime.mapEnd - DBTime.map, DBTime.compressEnd - DBTime.compress))
+	-- Debug
+	local endCharacters = string.len(DB)
+	self:Debug(1, "End characters %d (%d saved, %.2f%% compression), end time %s (%.2f taken)", endCharacters, startCharacters - endCharacters, 100 - (100 * (endCharacters / startCharacters)), GetTime(), GetTime() - startTime)
+	
+	return DB
 end
-]]

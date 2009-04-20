@@ -7,7 +7,8 @@ QuestDataRecLocals = {
 	["/qdr reset - Resets the saved quest database"] = "/qdr reset - Resets the saved quest database",
 	["/qdr stop - Stop recording quest data, you will have to manually start it back up."] = "/qdr stop - Stop recording quest data, you will have to manually start it back up.",
 	["/qdr start - Start recording quest data"] = "/qdr start - Start recording quest data",
-
+	["/qdr export - Allows you to export recorded quest data to the website."] = "/qdr export - Allows you to export recorded quest data to the website.",
+	
 	["Quest recording has been stopped until you start it again."] = "Quest recording has been stopped until you start it again.",
 	["Quest recording has been started."] = "Quest recording has been started.",
 	
@@ -15,4 +16,6 @@ QuestDataRecLocals = {
 	["Are you sure you want to reset ALL data recorded?"] = "Are you sure you want to reset ALL data recorded?",
 	["Yes"] = "Yes",
 	["No"] = "No",
+	
+	["Select all"] = "Select all",
 }

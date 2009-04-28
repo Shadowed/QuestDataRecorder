@@ -177,6 +177,7 @@ function QDR:LOOT_OPENED()
 
 			itemID = tonumber(itemID)
 
+			self.itemData[itemID].type = self.dataToID.item
 			table.insert(self.itemData[itemID].coords, self.mapToID[zone])
 			table.insert(self.itemData[itemID].coords, x)
 			table.insert(self.itemData[itemID].coords, y)
@@ -678,7 +679,7 @@ function QDR:PLAYER_LOGOUT()
 			coords = string.format("%s%s;", coords, coordData)
 		end
 		
-		self.db.itemdata[itemID] = string.format("{coords={%s}}", coords)
+		self.db.itemdata[itemID] = string.format("{type=%d;coords={%s}}", itemData.type or 0, coords)
 	end
 end
 

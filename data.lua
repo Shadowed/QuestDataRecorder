@@ -11,6 +11,7 @@ QDR.mapToID = {
 	["ScarletEnclave"] = 6,
 	
 	-- Kalimdor
+	["Kalimdor"] = 100,
 	["Ashenvale"] = 101,
 	["Aszhara"] = 102,
 	["AzuremystIsle"] = 103,
@@ -37,6 +38,7 @@ QDR.mapToID = {
 	["Winterspring"] = 124,
 
 	-- Eastern Kingdom
+	["Azeroth"] = 200,
 	["Alterac"] = 201,
 	["Arathi"] = 202,
 	["Badlands"] = 203,
@@ -68,6 +70,7 @@ QDR.mapToID = {
 	["Wetlands"] = 229,
 
 	-- Outlands
+	["Expansion01"] = 300,
 	["BladesEdgeMountains"] = 301,
 	["Hellfire"] = 302,
 	["Nagrand"] = 303,
@@ -78,6 +81,7 @@ QDR.mapToID = {
 	["Zangarmarsh"] = 308,
 	
 	-- Northrend
+	["Northrend"] = 400,
 	["BoreanTundra"] = 401,
 	["CrystalsongForest"] = 402,
 	["Dalaran"] = 403,
